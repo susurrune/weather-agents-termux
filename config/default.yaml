@@ -1,0 +1,61 @@
+# Weather Agents 默认配置
+
+# 全局 LLM 设置
+llm:
+  default_model: "gpt-4o-mini"
+  temperature: 0.7
+  max_tokens: 4096
+  timeout: 120
+
+# 各 Agent 模型覆盖（不设置则用 default_model）
+agents:
+  fog:
+    model: null
+    specialty: "探索研究"
+  rain:
+    model: null
+    specialty: "生成创造"
+  frost:
+    model: null
+    specialty: "审查优化"
+  snow:
+    model: null
+    specialty: "规划编排"
+  dew:
+    model: null
+    specialty: "运维集成"
+
+# 消息总线设置
+bus:
+  max_retries: 3
+  retry_delay: 1.0
+
+# 记忆系统
+memory:
+  db_path: "~/.weather-agents/memory.db"
+  short_term_limit: 50
+
+# Web 服务
+web:
+  host: "127.0.0.1"
+  port: 8765
+
+# 插件
+plugins:
+  enabled: true
+  directories:
+    - "~/.weather-agents/plugins"
+
+# MCP (Model Context Protocol) 服务器配置
+mcp:
+  servers:
+    - name: "filesystem"
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/root"]
+      enabled: false
+    - name: "github"
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      enabled: false

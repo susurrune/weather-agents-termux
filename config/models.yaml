@@ -1,0 +1,46 @@
+# 模型配置 - 各 Agent 可用不同模型
+
+# OpenAI
+openai:
+  gpt-4o:
+    provider: "openai"
+    context_window: 128000
+    max_output: 16384
+  gpt-4o-mini:
+    provider: "openai"
+    context_window: 128000
+    max_output: 16384
+  gpt-4.1:
+    provider: "openai"
+    context_window: 1047576
+    max_output: 32768
+  gpt-4.1-mini:
+    provider: "openai"
+    context_window: 1047576
+    max_output: 32768
+
+# Anthropic
+anthropic:
+  claude-sonnet-4-6:
+    provider: "anthropic"
+    context_window: 200000
+    max_output: 16384
+  claude-opus-4-7:
+    provider: "anthropic"
+    context_window: 200000
+    max_output: 16384
+  claude-haiku-4-5:
+    provider: "anthropic"
+    context_window: 200000
+    max_output: 8192
+
+# 本地模型
+local:
+  ollama/llama3:
+    provider: "ollama"
+    context_window: 8192
+    max_output: 4096
+  ollama/qwen2.5:
+    provider: "ollama"
+    context_window: 32768
+    max_output: 8192
