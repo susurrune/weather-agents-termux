@@ -9,6 +9,7 @@ class RainAgent(BaseAgent):
     emoji = "🌧️"
     specialty = "生成创造"
     tool_names = ["write_file", "edit_file", "read_file", "shell_exec", "http_get"]
+    skill_names = ["code_generator", "content_writer", "data_transformer"]
 
     system_prompt = """你是「雨」，源源不断，浇灌创意与代码。
 

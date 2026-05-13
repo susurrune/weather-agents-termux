@@ -12,6 +12,7 @@ from weather_agents.core.bus import Event, EventType, MessageBus
 from weather_agents.core.config import AppConfig
 from weather_agents.core.llm import LLMClient, LLMResponse
 from weather_agents.core.memory import Memory
+from weather_agents.core.skill import Skill, SkillRegistry
 from weather_agents.core.tool import Tool, ToolRegistry
 
 
@@ -50,6 +51,7 @@ class BaseAgent(ABC):
     specialty: str = ""
     system_prompt: str = ""
     tool_names: list[str] = []
+    skill_names: list[str] = []  # pre-installed skill names
 
     def __init__(
         self,
@@ -57,21 +59,94 @@ class BaseAgent(ABC):
         llm: LLMClient,
         bus: MessageBus,
         tool_registry: ToolRegistry,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self.config = config
         self.llm = llm
         self.bus = bus
         self.tool_registry = tool_registry
+        self.skill_registry = skill_registry or SkillRegistry()
         self.state = AgentState.IDLE
         self.memory = Memory(config.memory, self.name)
         self._tools: list[Tool] = []
+        self._skills: list[Skill] = []
+        self._active_skills: set[str] = set()
+        self._base_system_prompt: str = ""
 
     async def init(self) -> None:
-        """Initialize agent (memory, subscriptions, etc)."""
+        """Initialize agent (memory, subscriptions, skills, etc)."""
         await self.memory.init_db()
+        self._base_system_prompt = self.system_prompt
         self.memory.add_message("system", self.system_prompt)
         self._tools = self.tool_registry.get_tools(self.tool_names) or self.tool_registry.get_tools()
+        self._load_skills()
         self.bus.subscribe(self.name, self._handle_event)
+
+    def _load_skills(self) -> None:
+        """Load pre-installed skills and merge their tool requirements."""
+        self._skills = self.skill_registry.get_skills(self.skill_names) if self.skill_names else []
+        for skill in self._skills:
+            for tool_name in skill.required_tools:
+                tool = self.tool_registry.get(tool_name)
+                if tool and tool not in self._tools:
+                    self._tools.append(tool)
+
+    def activate_skill(self, name: str) -> bool:
+        """Activate a skill by name. Returns True if found and activated."""
+        if not any(s.name == name for s in self._skills):
+            return False
+        self._active_skills.add(name)
+        self._rebuild_system_prompt()
+        return True
+
+    def deactivate_skill(self, name: str) -> bool:
+        """Deactivate a skill. Returns True if it was active."""
+        if name not in self._active_skills:
+            return False
+        self._active_skills.discard(name)
+        self._rebuild_system_prompt()
+        return True
+
+    def deactivate_all_skills(self) -> None:
+        """Deactivate all skills and restore the base system prompt."""
+        self._active_skills.clear()
+        self._rebuild_system_prompt()
+
+    def _rebuild_system_prompt(self) -> None:
+        """Rebuild the system prompt with active skill prompts appended."""
+        if not self._active_skills:
+            prompt = self._base_system_prompt
+        else:
+            skill_prompts = []
+            for skill in self._skills:
+                if skill.name in self._active_skills and skill.system_prompt:
+                    skill_prompts.append(skill.system_prompt)
+            prompt = self._base_system_prompt
+            if skill_prompts:
+                prompt += "\n\n" + "\n\n".join(skill_prompts)
+
+        # Update the system message in short-term memory
+        for i, msg in enumerate(self.memory.short_term):
+            if msg.role == "system":
+                msg.content = prompt
+                break
+        else:
+            self.memory.add_message("system", prompt)
+
+    def get_active_skills(self) -> list[str]:
+        """Return names of currently active skills."""
+        return list(self._active_skills)
+
+    def get_available_skills(self) -> list[dict]:
+        """Return metadata for all pre-installed skills."""
+        return [
+            {
+                "name": s.name,
+                "description": s.description,
+                "active": s.name in self._active_skills,
+            }
+            for s in self._skills
+        ]
 
     async def close(self) -> None:
         await self.memory.close()
@@ -219,5 +294,5 @@ class BaseAgent(ABC):
             "emoji": self.emoji,
             "specialty": self.specialty,
             "state": self.state.value,
+            "skills": self.get_available_skills(),
         }
-

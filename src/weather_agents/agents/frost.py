@@ -9,6 +9,7 @@ class FrostAgent(BaseAgent):
     emoji = "❄️"
     specialty = "审查优化"
     tool_names = ["read_file", "file_search", "code_search", "shell_exec", "http_get"]
+    skill_names = ["code_reviewer", "security_auditor", "performance_checker"]
 
     system_prompt = """你是「霜」，精准凝结，审视每一处细节。
 

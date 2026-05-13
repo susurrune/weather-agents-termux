@@ -15,6 +15,7 @@ class SnowAgent(BaseAgent):
     emoji = "🌨️"
     specialty = "规划编排"
     tool_names = ["read_file", "write_file", "shell_exec"]
+    skill_names = ["task_planner", "arch_designer", "workflow_designer"]
 
     system_prompt = """你是「雪」，覆盖全局，让一切有序如冬。
 

@@ -43,7 +43,8 @@ async def _interactive(agent_name: str | None = None):
         agents = ctx.agent_map
         console.print(Panel(
             "[bold]Weather Agents[/bold]\n"
-            "/fog /rain /frost /snow /dew 切换  |  /task <目标> 编排  |  /status 状态  |  /clear 清屏  |  /quit 退出",
+            "/fog /rain /frost /snow /dew 切换  |  /task <目标> 编排  |  /skills 技能  |  /use <技能> 激活\n"
+            "/status 状态  |  /deactivate 关闭技能  |  /clear 清屏  |  /quit 退出",
             title="Welcome", border_style="cyan",
         ))
         current = agent_name or "fog"
@@ -66,7 +67,38 @@ async def _interactive(agent_name: str | None = None):
             if cmd == "/status":
                 for a in agents.values():
                     s = a.get_status()
-                    console.print(f"  {s['emoji']} {s['display_name']}: [bold]{s['state']}[/bold]")
+                    skills_str = ""
+                    if s.get("skills"):
+                        active = [sk["name"] for sk in s["skills"] if sk.get("active")]
+                        if active:
+                            skills_str = f" [dim]skills: {', '.join(active)}[/dim]"
+                    console.print(f"  {s['emoji']} {s['display_name']}: [bold]{s['state']}[/bold]{skills_str}")
+                continue
+            if cmd == "/skills":
+                skills = agent.get_available_skills()
+                if not skills:
+                    console.print("[dim]{agent.display_name} 没有可用技能[/dim]")
+                else:
+                    from rich.table import Table
+                    tbl = Table(title=f"{agent.emoji} {agent.display_name} 技能")
+                    tbl.add_column("技能", style="cyan")
+                    tbl.add_column("描述", style="white")
+                    tbl.add_column("状态", style="green", width=8)
+                    for sk in skills:
+                        status = "✅ 激活" if sk["active"] else "  待用"
+                        tbl.add_row(sk["name"], sk["description"], status)
+                    console.print(tbl)
+                continue
+            if cmd.startswith("/use "):
+                skill_name = cmd[5:]
+                if agent.activate_skill(skill_name):
+                    console.print(f"[green]✅ 技能 [{skill_name}] 已激活[/green]")
+                else:
+                    console.print(f"[red]未知技能: {skill_name}（输入 /skills 查看可用技能）[/red]")
+                continue
+            if cmd == "/deactivate":
+                agent.deactivate_all_skills()
+                console.print("[green]所有技能已关闭，恢复基础提示词[/green]")
                 continue
             if cmd.startswith("/task "):
                 goal = cmd[6:]
@@ -79,7 +111,7 @@ async def _interactive(agent_name: str | None = None):
                 console.print(f"→ {agent.emoji} {agent.display_name}")
                 continue
             if cmd.startswith("/"):
-                console.print("[dim]命令: /fog /rain /frost /snow /dew /task /status /clear /quit[/dim]")
+                console.print("[dim]命令: /fog /rain /frost /snow /dew /task /skills /use /deactivate /status /clear /quit[/dim]")
                 continue
 
             # Streaming chat

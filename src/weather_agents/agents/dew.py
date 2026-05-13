@@ -9,6 +9,7 @@ class DewAgent(BaseAgent):
     emoji = "💧"
     specialty = "运维集成"
     tool_names = ["shell_exec", "read_file", "write_file", "http_get", "http_post"]
+    skill_names = ["sys_operator", "ci_cd_manager", "api_integrator"]
 
     system_prompt = """你是「露」，润物无声，守护系统每一个角落。
 

@@ -17,7 +17,9 @@ from weather_agents.core.agent import BaseAgent, Task as AgentTask
 from weather_agents.core.bus import MessageBus
 from weather_agents.core.config import AppConfig, load_config
 from weather_agents.core.llm import LLMClient
+from weather_agents.core.skill import global_skill_registry
 from weather_agents.core.tool import global_registry
+from weather_agents.skills.loader import register_all_skills
 from weather_agents.tools.builtin import register_builtin_tools
 
 AGENT_CLASSES = {
@@ -56,13 +58,18 @@ class SystemContext:
 
 
 def create_system_context() -> SystemContext:
-    """Bootstrap the full system: config, bus, LLM, tools, agents."""
+    """Bootstrap the full system: config, bus, LLM, tools, skills, agents."""
     config = load_config()
     bus = MessageBus()
     register_builtin_tools()
+    register_all_skills()
     llm = LLMClient(config, global_registry)
     agents = {
-        name: cls(config=config, llm=llm, bus=bus, tool_registry=global_registry)
+        name: cls(
+            config=config, llm=llm, bus=bus,
+            tool_registry=global_registry,
+            skill_registry=global_skill_registry,
+        )
         for name, cls in AGENT_CLASSES.items()
     }
     return SystemContext(config=config, bus=bus, llm=llm, agent_map=agents)

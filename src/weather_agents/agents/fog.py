@@ -9,6 +9,7 @@ class FogAgent(BaseAgent):
     emoji = "🌫️"
     specialty = "探索研究"
     tool_names = ["web_search", "file_search", "code_search", "read_file", "http_get"]
+    skill_names = ["web_research", "code_analysis", "document_analysis"]
 
     system_prompt = """你是「雾」，弥漫于信息之间，洞察隐藏的真相。
 
