@@ -20,7 +20,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.25",
+    "pytest-cov>=5.0",
     "ruff>=0.9",
+    "mypy>=1.15",
 ]
 
 [project.scripts]

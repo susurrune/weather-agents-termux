@@ -1,420 +1,356 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weather Agents — 雾·雨·霜·雪·露</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Agents</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1419; --surface: #1a1f2e; --surface2: #242b3d;
+  --border: #2a3344; --text: #e2e8f0; --text-dim: #7f8ea3;
+  --accent: #38bdf8; --accent-dim: #1e6f9e; --green: #4ade80;
+  --red: #fb7185; --yellow: #fbbf24; --radius: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
+a { color: var(--accent); text-decoration: none; }
 
-        .header { background: linear-gradient(135deg, #1e293b, #334155); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #475569; }
-        .header h1 { font-size: 20px; font-weight: 600; }
-        .header .subtitle { font-size: 13px; color: #94a3b8; }
+.sidebar {
+  width: 240px; background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; flex-shrink: 0;
+}
+.sidebar-header { padding: 20px; border-bottom: 1px solid var(--border); }
+.sidebar-header h1 { font-size: 18px; display: flex; align-items: center; gap: 8px; }
+.sidebar-header small { color: var(--text-dim); font-size: 12px; }
+.sidebar-nav { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.nav-item {
+  padding: 10px 12px; border-radius: 8px; cursor: pointer; display: flex;
+  align-items: center; gap: 8px; font-size: 14px; color: var(--text-dim);
+  transition: all .15s; border: none; background: none; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--surface2); color: var(--accent); }
 
-        .agent-bar { display: flex; gap: 8px; padding: 12px 24px; background: #1e293b; border-bottom: 1px solid #334155; overflow-x: auto; }
-        .agent-card { flex: 0 0 auto; padding: 10px 16px; border-radius: 10px; cursor: pointer; transition: all 0.2s; border: 2px solid transparent; min-width: 140px; text-align: center; }
-        .agent-card:hover { transform: translateY(-2px); }
-        .agent-card.active { border-color: #38bdf8; }
-        .agent-card .emoji { font-size: 28px; }
-        .agent-card .name { font-size: 14px; font-weight: 600; margin-top: 4px; }
-        .agent-card .specialty { font-size: 11px; color: #94a3b8; margin-top: 2px; }
-        .agent-card .state { font-size: 11px; margin-top: 4px; padding: 2px 8px; border-radius: 10px; display: inline-block; }
-        .state-idle { background: #065f46; color: #6ee7b7; }
-        .state-thinking { background: #1e3a5f; color: #7dd3fc; }
-        .state-acting { background: #4a1d7a; color: #c084fc; }
-        .state-error { background: #7f1d1d; color: #fca5a5; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
-        .fog { background: rgba(148,163,184,0.15); }
-        .rain { background: rgba(56,189,248,0.15); }
-        .frost { background: rgba(165,243,252,0.15); }
-        .snow { background: rgba(226,232,240,0.15); }
-        .dew { background: rgba(74,222,128,0.15); }
+.agent-bar {
+  display: flex; gap: 8px; padding: 12px 20px;
+  border-bottom: 1px solid var(--border); overflow-x: auto;
+  background: var(--surface);
+}
+.agent-btn {
+  padding: 6px 14px; border-radius: 20px; cursor: pointer; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); font-size: 13px;
+  transition: all .15s; white-space: nowrap;
+}
+.agent-btn:hover { border-color: var(--accent); color: var(--text); }
+.agent-btn.active { background: var(--accent-dim); border-color: var(--accent); color: white; }
 
-        .main { display: grid; grid-template-columns: 1fr 340px; height: calc(100vh - 140px); }
+.chat-area { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.msg {
+  max-width: 80%; padding: 12px 16px; border-radius: var(--radius);
+  line-height: 1.6; font-size: 14px; animation: fadeIn .2s;
+}
+.msg.user { align-self: flex-end; background: var(--accent-dim); color: white; }
+.msg.assistant { align-self: flex-start; background: var(--surface2); }
+.msg.system { align-self: center; background: transparent; color: var(--text-dim); font-size: 12px; font-style: italic; }
+.msg .sender { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--accent); }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-        .chat-area { display: flex; flex-direction: column; border-right: 1px solid #334155; }
-        .messages { flex: 1; overflow-y: auto; padding: 20px 24px; }
-        .msg { margin-bottom: 16px; max-width: 85%; }
-        .msg.user { margin-left: auto; }
-        .msg.agent { margin-right: auto; }
-        .msg.system { margin: 8px auto; text-align: center; }
-        .msg.system .msg-bubble { background: transparent; color: #64748b; font-size: 12px; padding: 4px 12px; }
-        .msg-bubble { padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 14px; white-space: pre-wrap; }
-        .msg.user .msg-bubble { background: #1d4ed8; color: white; border-bottom-right-radius: 4px; }
-        .msg.agent .msg-bubble { background: #334155; border-bottom-left-radius: 4px; }
-        .msg .sender { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
-        .msg .timestamp { font-size: 11px; color: #64748b; margin-top: 4px; }
+.input-bar {
+  display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.input-bar input {
+  flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); font-size: 14px; outline: none;
+}
+.input-bar input:focus { border-color: var(--accent); }
+.input-bar button {
+  padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer;
+  background: var(--accent); color: white; font-size: 14px; font-weight: 600;
+  transition: opacity .15s;
+}
+.input-bar button:hover { opacity: .85; }
+.input-bar button:disabled { opacity: .4; cursor: not-allowed; }
 
-        .typing-indicator { display: none; padding: 8px 24px; align-items: center; gap: 8px; color: #7dd3fc; font-size: 13px; background: #1e293b; border-top: 1px solid #334155; }
-        .typing-indicator.active { display: flex; }
-        .typing-indicator .spinner { width: 14px; height: 14px; border: 2px solid #334155; border-top-color: #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
+.panel { display: none; flex: 1; }
+.panel.active { display: flex; flex-direction: column; }
 
-        .input-area { padding: 12px 24px; border-top: 1px solid #334155; display: flex; gap: 8px; }
-        .input-area input { flex: 1; padding: 10px 16px; border-radius: 8px; border: 1px solid #475569; background: #1e293b; color: white; font-size: 14px; outline: none; }
-        .input-area input:focus { border-color: #38bdf8; }
-        .input-area button { padding: 10px 20px; border-radius: 8px; border: none; background: #2563eb; color: white; cursor: pointer; font-size: 14px; font-weight: 500; }
-        .input-area button:hover { background: #1d4ed8; }
-        .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+.status-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px; padding: 20px;
+}
+.status-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.status-card h3 { font-size: 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.status-card .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+.status-card .label { color: var(--text-dim); }
+.status-card .highlight { color: var(--green); font-weight: 600; }
 
-        .sidebar { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
-        .sidebar h3 { font-size: 13px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
-        .task-item { background: #1e293b; border-radius: 8px; padding: 12px; border-left: 3px solid #475569; }
-        .task-item.done { border-left-color: #22c55e; }
-        .task-item.failed { border-left-color: #ef4444; }
-        .task-item .task-agent { font-size: 12px; color: #7dd3fc; }
-        .task-item .task-desc { font-size: 13px; margin-top: 4px; }
-        .task-item .task-status { font-size: 11px; margin-top: 4px; }
+.skills-list { padding: 20px; display: flex; flex-direction: column; gap: 8px; max-width: 600px; }
+.skill-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.skill-item .info { flex: 1; }
+.skill-item .name { font-size: 14px; font-weight: 600; }
+.skill-item .desc { font-size: 12px; color: var(--text-dim); }
+.toggle {
+  width: 40px; height: 22px; border-radius: 11px; cursor: pointer; border: none;
+  background: var(--border); position: relative; transition: background .2s; flex-shrink: 0;
+}
+.toggle.active { background: var(--accent); }
+.toggle::after {
+  content: ''; width: 18px; height: 18px; border-radius: 50%; background: white;
+  position: absolute; top: 2px; left: 2px; transition: transform .2s;
+}
+.toggle.active::after { transform: translateX(18px); }
 
-        .config-panel { }
-        .config-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1e293b; font-size: 13px; }
-        .config-item select { background: #1e293b; color: white; border: 1px solid #475569; border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+.config-form { padding: 20px; max-width: 500px; display: flex; flex-direction: column; gap: 12px; }
+.config-form label { font-size: 13px; color: var(--text-dim); }
+.config-form input, .config-form select {
+  width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); font-size: 13px; outline: none;
+}
+.config-form input:focus { border-color: var(--accent); }
 
-        .summary-panel { background: #1e293b; border-radius: 8px; padding: 12px; }
-        .summary-panel .summary-content { font-size: 13px; line-height: 1.5; color: #cbd5e1; margin-top: 4px; max-height: 200px; overflow-y: auto; }
+.debug-panel { padding: 20px; }
+.debug-panel pre {
+  background: #0005; padding: 16px; border-radius: var(--radius);
+  overflow: auto; font-size: 12px; max-height: 60vh; line-height: 1.5;
+}
+.text-dim { color: var(--text-dim); }
+.text-sm { font-size: 13px; }
+.p-4 { padding: 20px; }
 
-        .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
-    </style>
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .msg { max-width: 92%; }
+  .status-grid { grid-template-columns: 1fr; }
+}
+</style>
 </head>
 <body>
-    <div class="header">
-        <div>
-            <h1>Weather Agents</h1>
-            <div class="subtitle">🌫️ 雾 · 🌧️ 雨 · ❄️ 霜 · 🌨️ 雪 · 💧 露</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-            <span id="sessionId" style="font-size:11px;color:#64748b;"></span>
-            <button onclick="refreshAgents()" style="padding:6px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#94a3b8;cursor:pointer;font-size:12px;">Refresh</button>
-        </div>
+
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1>🌤️ Agents</h1>
+    <small>多智能体协作系统</small>
+  </div>
+  <div class="sidebar-nav">
+    <button class="nav-item active" data-panel="chat" onclick="switchPanel('chat')">💬 对话</button>
+    <button class="nav-item" data-panel="status" onclick="switchPanel('status')">📊 状态</button>
+    <button class="nav-item" data-panel="skills" onclick="switchPanel('skills')">⚡ 技能</button>
+    <button class="nav-item" data-panel="config" onclick="switchPanel('config')">⚙️ 配置</button>
+    <button class="nav-item" data-panel="debug" onclick="switchPanel('debug')">🔍 日志</button>
+  </div>
+</nav>
+
+<div class="main">
+
+<div class="agent-bar" id="agentBar"></div>
+
+<div class="panel active" id="panel-chat">
+  <div class="chat-area">
+    <div class="messages" id="messages"></div>
+    <div class="input-bar">
+      <input type="text" id="chatInput" placeholder="输入消息..." onkeydown="if(event.key==='Enter') sendMessage()">
+      <button id="sendBtn" onclick="sendMessage()">发送</button>
     </div>
+  </div>
+</div>
 
-    <div class="agent-bar" id="agentBar">
-        <div class="agent-card fog active" data-agent="fog" onclick="selectAgent('fog')">
-            <div class="emoji">🌫️</div>
-            <div class="name">雾 Fog</div>
-            <div class="specialty">探索研究</div>
-            <div class="state state-idle">idle</div>
-        </div>
-        <div class="agent-card rain" data-agent="rain" onclick="selectAgent('rain')">
-            <div class="emoji">🌧️</div>
-            <div class="name">雨 Rain</div>
-            <div class="specialty">生成创造</div>
-            <div class="state state-idle">idle</div>
-        </div>
-        <div class="agent-card frost" data-agent="frost" onclick="selectAgent('frost')">
-            <div class="emoji">❄️</div>
-            <div class="name">霜 Frost</div>
-            <div class="specialty">审查优化</div>
-            <div class="state state-idle">idle</div>
-        </div>
-        <div class="agent-card snow" data-agent="snow" onclick="selectAgent('snow')">
-            <div class="emoji">🌨️</div>
-            <div class="name">雪 Snow</div>
-            <div class="specialty">规划编排</div>
-            <div class="state state-idle">idle</div>
-        </div>
-        <div class="agent-card dew" data-agent="dew" onclick="selectAgent('dew')">
-            <div class="emoji">💧</div>
-            <div class="name">露 Dew</div>
-            <div class="specialty">运维集成</div>
-            <div class="state state-idle">idle</div>
-        </div>
+<div class="panel" id="panel-status">
+  <div class="status-grid" id="statusGrid"></div>
+</div>
+
+<div class="panel" id="panel-skills">
+  <div class="p-4">
+    <p class="text-dim text-sm">每个 Agent 拥有 3 个专属技能，可动态激活。</p>
+  </div>
+  <div class="skills-list" id="skillsList"></div>
+</div>
+
+<div class="panel" id="panel-config">
+  <div class="config-form">
+    <label>默认模型</label>
+    <input id="cfgDefaultModel" placeholder="gpt-4o-mini" readonly style="opacity:.6">
+    <label>Temperature</label>
+    <input id="cfgTemperature" type="number" step="0.1" min="0" max="2" placeholder="0.7" readonly style="opacity:.6">
+    <label>Max Tokens</label>
+    <input id="cfgMaxTokens" type="number" placeholder="4096" readonly style="opacity:.6">
+    <label>Timeout (秒)</label>
+    <input id="cfgTimeout" type="number" placeholder="120" readonly style="opacity:.6">
+    <p class="text-dim text-sm">配置修改请使用 CLI: <code>wa config set &lt;key&gt; &lt;value&gt;</code></p>
+  </div>
+</div>
+
+<div class="panel" id="panel-debug">
+  <div class="debug-panel">
+    <pre id="debugLog">等待连接...</pre>
+  </div>
+</div>
+
+</div>
+
+<script>
+const STATE = { agents: {}, currentAgent: 'fog', ws: null, sessionId: null, connecting: false };
+
+function connectWS() {
+  if (STATE.connecting) return;
+  STATE.connecting = true;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => { debug('WebSocket 已连接'); };
+  ws.onmessage = (e) => { try { handleMessage(JSON.parse(e.data)); } catch (err) { debug('解析错误: ' + err.message); } };
+  ws.onclose = () => { debug('WebSocket 已断开，5秒后重连'); STATE.connecting = false; STATE.ws = null; setTimeout(connectWS, 5000); };
+  ws.onerror = () => ws.close();
+  STATE.ws = ws;
+}
+
+function sendWS(msg) { if (STATE.ws && STATE.ws.readyState === WebSocket.OPEN) STATE.ws.send(JSON.stringify(msg)); }
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'session_ready':
+      STATE.sessionId = msg.session_id; STATE.agents = {};
+      for (const a of msg.agents) STATE.agents[a.name] = a;
+      renderAgentBar(); renderStatus(); renderSkills();
+      debug('会话就绪: ' + msg.session_id);
+      addSystemMsg('会话已建立');
+      break;
+    case 'chat_chunk':
+      if (msg.done) {
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('chatInput').disabled = false;
+        document.getElementById('chatInput').focus();
+      } else { appendStreamChunk(msg.chunk); }
+      break;
+    case 'state_change':
+      if (STATE.agents[msg.agent]) { STATE.agents[msg.agent].state = msg.state; renderStatus(); renderAgentBar(); }
+      break;
+    case 'task_plan': showTaskPlan(msg.goal, msg.tasks); break;
+    case 'error': addSystemMsg('❌ ' + msg.message); break;
+    case 'pong': break;
+  }
+}
+
+function renderAgentBar() {
+  document.getElementById('agentBar').innerHTML = Object.values(STATE.agents).map(a =>
+    `<button class="agent-btn ${a.name === STATE.currentAgent ? 'active' : ''}" onclick="switchAgent('${a.name}')">
+      ${a.emoji} ${a.display_name} <span style="font-size:11px;color:var(--text-dim)">${a.state}</span></button>`
+  ).join('');
+}
+
+function switchAgent(name) { STATE.currentAgent = name; renderAgentBar(); document.getElementById('messages').innerHTML = ''; }
+
+function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  streamMsgEl = null;
+  addMessage('user', msg, STATE.agents[STATE.currentAgent]?.emoji || '');
+  document.getElementById('sendBtn').disabled = true;
+  input.disabled = true;
+  sendWS({ type: 'chat', agent: STATE.currentAgent, message: msg });
+}
+
+let streamMsgEl = null;
+function addMessage(role, content, sender) {
+  const el = document.createElement('div'); el.className = 'msg ' + role;
+  if (sender && role === 'user') el.innerHTML = '<div class="sender">' + esc(sender) + '</div>' + esc(content);
+  else if (role === 'assistant') el.innerHTML = '<div class="sender">' + esc(sender || '') + '</div><div class="content"></div>';
+  else el.textContent = content;
+  document.getElementById('messages').appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth' });
+  return el;
+}
+
+function addSystemMsg(text) { const el = addMessage('system', text, null); }
+
+function appendStreamChunk(chunk) {
+  if (!streamMsgEl) {
+    const a = STATE.agents[STATE.currentAgent];
+    streamMsgEl = addMessage('assistant', '', a?.emoji || '');
+  }
+  const c = streamMsgEl.querySelector('.content');
+  if (c) { c.textContent += chunk; streamMsgEl.scrollIntoView({ behavior: 'smooth' }); }
+}
+
+function renderStatus() {
+  document.getElementById('statusGrid').innerHTML = Object.values(STATE.agents).map(a => `
+    <div class="status-card">
+      <h3>${a.emoji} ${a.display_name} <span style="font-size:12px;color:var(--text-dim)">(${a.name})</span></h3>
+      <div class="row"><span class="label">专长</span><span>${a.specialty}</span></div>
+      <div class="row"><span class="label">状态</span><span style="color:${a.state === 'idle' ? 'var(--green)' : 'var(--yellow)'}">${a.state}</span></div>
+      <div class="row"><span class="label">调用次数</span><span class="highlight">${a.usage?.calls || 0}</span></div>
+      <div class="row"><span class="label">Token (输入/输出)</span><span>${(a.usage?.prompt_tokens||0).toLocaleString()} / ${(a.usage?.completion_tokens||0).toLocaleString()}</span></div>
+      <div class="row"><span class="label">费用</span><span>$${(a.usage?.cost || 0).toFixed(6)}</span></div>
+      <div class="row"><span class="label">激活技能</span><span>${(a.skills||[]).filter(s=>s.active).map(s=>s.name).join(', ') || '—'}</span></div>
     </div>
+  `).join('');
+}
 
-    <div class="main">
-        <div class="chat-area">
-            <div class="messages" id="messages"></div>
-            <div class="typing-indicator" id="typing">
-                <div class="spinner"></div>
-                <span id="typingText">思考中...</span>
-            </div>
-            <div class="input-area">
-                <input type="text" id="msgInput" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendMessage()">
-                <button id="sendBtn" onclick="sendMessage()">Send</button>
-            </div>
-        </div>
-        <div class="sidebar">
-            <div>
-                <h3>Task Board</h3>
-                <div id="taskBoard"><div style="color:#64748b;font-size:13px;">暂无任务</div></div>
-            </div>
-            <div id="summaryContainer" class="summary-panel" style="display:none;">
-                <h3>Summary</h3>
-                <div class="summary-content" id="summaryContent"></div>
-            </div>
-            <div class="config-panel">
-                <h3>Config</h3>
-                <div class="config-item">
-                    <span>Default Model</span>
-                    <select id="defaultModel">
-                        <option>gpt-4o-mini</option>
-                        <option>gpt-4o</option>
-                        <option>claude-sonnet-4-6</option>
-                        <option>claude-haiku-4-5</option>
-                        <option>gpt-4.1</option>
-                        <option>gpt-4.1-mini</option>
-                    </select>
-                </div>
-            </div>
-        </div>
+function renderSkills() {
+  const a = STATE.agents[STATE.currentAgent];
+  const list = document.getElementById('skillsList');
+  if (!a || !a.skills) { list.innerHTML = '<p class="text-dim">选择 Agent 查看技能</p>'; return; }
+  list.innerHTML = a.skills.map(s => `
+    <div class="skill-item">
+      <div class="info">
+        <div class="name">${esc(s.name)}</div>
+        <div class="desc">${esc(s.description)}</div>
+      </div>
+      <button class="toggle ${s.active ? 'active' : ''}" onclick="toggleSkill('${s.name}')"></button>
     </div>
+  `).join('');
+}
 
-    <script>
-        let currentAgent = 'fog';
-        let ws = null;
-        let streamingMsgEl = null;
-        let sessionId = '';
+function toggleSkill(name) {
+  sendWS({ type: 'chat', agent: STATE.currentAgent, message: '/use ' + name });
+  setTimeout(fetchStatus, 500);
+}
 
-        function selectAgent(name) {
-            currentAgent = name;
-            document.querySelectorAll('.agent-card').forEach(c => c.classList.remove('active'));
-            document.querySelector(`[data-agent="${name}"]`).classList.add('active');
-            const info = getAgentInfo(name);
-            document.getElementById('msgInput').placeholder = `与${info.name}对话...`;
-        }
+function showTaskPlan(goal, tasks) {
+  switchPanel('chat');
+  addSystemMsg('📋 任务计划: ' + goal);
+  for (const t of tasks) addSystemMsg('  ' + t.id + '. ' + (STATE.agents[t.agent]?.emoji || '❓') + ' ' + t.description);
+}
 
-        function getAgentInfo(name) {
-            const map = {
-                fog: { name: '雾', emoji: '🌫️' },
-                rain: { name: '雨', emoji: '🌧️' },
-                frost: { name: '霜', emoji: '❄️' },
-                snow: { name: '雪', emoji: '🌨️' },
-                dew: { name: '露', emoji: '💧' },
-            };
-            return map[name] || { name, emoji: '❓' };
-        }
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/agents'); const agents = await r.json();
+    for (const a of agents) STATE.agents[a.name] = a;
+    renderStatus(); renderSkills(); renderAgentBar();
+  } catch (e) { debug('获取状态失败'); }
+}
 
-        function addMessage(role, content, agentName, isStreaming) {
-            const msgs = document.getElementById('messages');
-            const div = document.createElement('div');
+function switchPanel(name) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  document.querySelector('[data-panel="' + name + '"]').classList.add('active');
+  if (name === 'status') fetchStatus();
+  if (name === 'skills') renderSkills();
+}
 
-            if (role === 'system') {
-                div.className = 'msg system';
-                const bubble = document.createElement('div');
-                bubble.className = 'msg-bubble';
-                bubble.textContent = content;
-                div.appendChild(bubble);
-            } else {
-                div.className = `msg ${role === 'user' ? 'user' : 'agent'}`;
-                const sender = document.createElement('div');
-                sender.className = 'sender';
-                const info = getAgentInfo(agentName);
-                sender.textContent = role === 'user' ? 'You' : `${info.emoji} ${info.name}`;
-                const bubble = document.createElement('div');
-                bubble.className = 'msg-bubble';
-                bubble.textContent = content;
+function debug(msg) {
+  const log = document.getElementById('debugLog');
+  log.textContent += '\n[' + new Date().toLocaleTimeString() + '] ' + msg;
+  log.scrollTop = log.scrollHeight;
+}
 
-                div.appendChild(sender);
-                div.appendChild(bubble);
+function esc(str) {
+  var div = document.createElement('div'); div.textContent = str; return div.innerHTML;
+}
 
-                if (role === 'agent') {
-                    const ts = document.createElement('div');
-                    ts.className = 'timestamp';
-                    ts.textContent = new Date().toLocaleTimeString();
-                    div.appendChild(ts);
-                }
-            }
-
-            msgs.appendChild(div);
-            msgs.scrollTop = msgs.scrollHeight;
-            return bubble;
-        }
-
-        function appendStreamingChunk(chunk, agentName) {
-            const msgs = document.getElementById('messages');
-            let lastMsg = msgs.lastElementChild;
-
-            // Check if last message is a streaming agent message from the same agent
-            if (!lastMsg || !lastMsg.classList.contains('msg') || !lastMsg.classList.contains('agent') ||
-                (lastMsg.querySelector('.sender')?.textContent !== getAgentInfo(agentName).emoji + ' ' + getAgentInfo(agentName).name)) {
-                // Create new message for streaming
-                streamingMsgEl = addMessage('agent', chunk, agentName, true);
-                return;
-            }
-
-            streamingMsgEl = lastMsg.querySelector('.msg-bubble');
-            if (streamingMsgEl) {
-                streamingMsgEl.textContent += chunk;
-                msgs.scrollTop = msgs.scrollHeight;
-            }
-        }
-
-        function finalizeStreaming() {
-            streamingMsgEl = null;
-        }
-
-        function setTyping(on, text) {
-            const el = document.getElementById('typing');
-            el.classList.toggle('active', on);
-            if (text) document.getElementById('typingText').textContent = text;
-            document.getElementById('sendBtn').disabled = on;
-        }
-
-        function updateAgentState(agentName, state) {
-            const card = document.querySelector(`[data-agent="${agentName}"]`);
-            if (!card) return;
-            const stateEl = card.querySelector('.state');
-            stateEl.textContent = state;
-            stateEl.className = `state state-${state}`;
-        }
-
-        async function sendMessage() {
-            const input = document.getElementById('msgInput');
-            const msg = input.value.trim();
-            if (!msg) return;
-            input.value = '';
-
-            addMessage('user', msg, currentAgent);
-
-            // Handle /task command via REST
-            if (msg.startsWith('/task ')) {
-                const goal = msg.slice(6);
-                setTyping(true, '正在规划任务...');
-                try {
-                    const resp = await fetch(`/api/task?session_id=${sessionId}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ goal }),
-                    });
-                    const data = await resp.json();
-                    updateTaskBoard(data);
-                    if (data.summary) {
-                        document.getElementById('summaryContainer').style.display = 'block';
-                        document.getElementById('summaryContent').textContent = data.summary;
-                    }
-                } catch (e) {
-                    addMessage('agent', 'Error: ' + e.message, 'snow');
-                }
-                setTyping(false);
-                return;
-            }
-
-            // Stream via WebSocket
-            setTyping(true, '思考中...');
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    type: 'chat',
-                    agent: currentAgent,
-                    message: msg,
-                }));
-            } else {
-                // Fallback to REST
-                try {
-                    const resp = await fetch(`/api/agents/${currentAgent}/chat?session_id=${sessionId}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: msg }),
-                    });
-                    const data = await resp.json();
-                    addMessage('agent', data.response || 'No response', currentAgent);
-                } catch (e) {
-                    addMessage('agent', 'Error: ' + e.message, currentAgent);
-                }
-                setTyping(false);
-            }
-        }
-
-        function updateTaskBoard(data) {
-            const board = document.getElementById('taskBoard');
-            if (!data.tasks || data.tasks.length === 0) {
-                board.innerHTML = '<div style="color:#64748b;font-size:13px;">暂无任务</div>';
-                return;
-            }
-            board.innerHTML = '';
-
-            // Show task plan
-            (data.tasks || []).forEach(t => {
-                const info = getAgentInfo(t.agent || 'fog');
-                const item = document.createElement('div');
-                item.className = 'task-item';
-                item.id = `task-${t.id}`;
-                item.innerHTML = `<div class="task-agent">${info.emoji} ${info.name}</div><div class="task-desc">${t.description}</div><div class="task-status">⏳ 待执行</div>`;
-                board.appendChild(item);
-            });
-
-            // Mark results
-            if (data.results) {
-                data.results.forEach(r => {
-                    const item = document.getElementById(`task-${r.id}`);
-                    if (item) {
-                        item.classList.add(r.success ? 'done' : 'failed');
-                        item.querySelector('.task-status').textContent = r.success ? '✅ 完成' : '❌ 失败';
-                    }
-                });
-            }
-        }
-
-        async function refreshAgents() {
-            try {
-                const resp = await fetch(`/api/agents?session_id=${sessionId}`);
-                const agents = await resp.json();
-                agents.forEach(a => {
-                    updateAgentState(a.name, a.state);
-                });
-            } catch (e) {}
-        }
-
-        // WebSocket
-        function connectWS() {
-            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-            ws = new WebSocket(`${proto}://${location.host}/ws`);
-            ws.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                const type = data.type;
-
-                switch (type) {
-                    case 'session_ready':
-                        sessionId = data.session_id;
-                        document.getElementById('sessionId').textContent = `Session: ${sessionId}`;
-                        if (data.agents) {
-                            data.agents.forEach(a => updateAgentState(a.name, a.state));
-                        }
-                        break;
-
-                    case 'chat_chunk':
-                        setTyping(false);
-                        if (data.done) {
-                            finalizeStreaming();
-                        } else if (data.chunk) {
-                            appendStreamingChunk(data.chunk, data.agent);
-                        }
-                        break;
-
-                    case 'state_change':
-                        updateAgentState(data.agent, data.state);
-                        if (data.state === 'thinking') {
-                            setTyping(true, `${getAgentInfo(data.agent).emoji} ${getAgentInfo(data.agent).name} 思考中...`);
-                        } else if (data.state === 'acting') {
-                            setTyping(true, `${getAgentInfo(data.agent).emoji} ${getAgentInfo(data.agent).name} 执行工具中...`);
-                        } else if (data.state === 'idle') {
-                            setTyping(false);
-                        } else if (data.state === 'error') {
-                            setTyping(false);
-                        }
-                        break;
-
-                    case 'task_plan':
-                        updateTaskBoard(data);
-                        break;
-
-                    case 'pong':
-                        break;
-
-                    case 'error':
-                        addMessage('system', 'Error: ' + data.message, '');
-                        setTyping(false);
-                        break;
-                }
-            };
-            ws.onclose = () => setTimeout(connectWS, 3000);
-        }
-        connectWS();
-
-        // Periodic refresh as fallback
-        setInterval(async () => {
-            if (sessionId) refreshAgents();
-        }, 15000);
-    </script>
+document.addEventListener('DOMContentLoaded', () => { connectWS(); setInterval(fetchStatus, 5000); });
+</script>
 </body>
 </html>

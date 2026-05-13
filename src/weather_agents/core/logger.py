@@ -3,7 +3,7 @@
 Usage:
     from weather_agents.core.logger import get_logger
     log = get_logger("fog")
-    log.info("chat_request", user_message="hello", agent="fog")
+    log.info("chat_request", extra={"user_message": "hello", "agent": "fog"})
 """
 
 from __future__ import annotations
@@ -15,35 +15,51 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Module-level registry so logger config persists
 _configured = False
 _loggers: dict[str, logging.Logger] = {}
+_request_id: str | None = None
+
+
+def set_request_id(request_id: str | None) -> None:
+    """Set a global request ID for the current operation."""
+    global _request_id
+    _request_id = request_id
+
+
+def get_request_id() -> str | None:
+    return _request_id
 
 
 class StructuredFormatter(logging.Formatter):
     """JSON-lines formatter for machine-parseable logs."""
 
     def format(self, record: logging.LogRecord) -> str:
-        obj = {
+        obj: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname.lower(),
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        if _request_id:
+            obj["request_id"] = _request_id
         if hasattr(record, "extra_fields"):
             obj.update(record.extra_fields)
+        # Drop internal field used for structured logging
+        obj.pop("extra_fields", None)
         return json.dumps(obj, ensure_ascii=False, default=str)
 
 
 def setup_logging(
     level: str = "INFO",
     log_file: str | None = None,
+    json_output: bool = True,
 ) -> None:
     """Configure root logger with structured output.
 
     Args:
         level: One of DEBUG, INFO, WARNING, ERROR
         log_file: Optional file path; if not set, logs go to stderr.
+        json_output: If False, use plain text format for development.
     """
     global _configured
     if _configured:
@@ -53,14 +69,18 @@ def setup_logging(
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.handlers.clear()
 
-    fmt = StructuredFormatter()
+    if json_output:
+        fmt: logging.Formatter = StructuredFormatter()
+    else:
+        fmt = logging.Formatter(
+            "[%(asctime)s] %(levelname)-5s %(name)s - %(message)s",
+            datefmt="%H:%M:%S",
+        )
 
-    # Always log to stderr
     sh = logging.StreamHandler(sys.stderr)
     sh.setFormatter(fmt)
     root.addHandler(sh)
 
-    # Optional file handler
     if log_file:
         p = Path(log_file)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -88,7 +108,10 @@ class LoggerMixin:
 
 
 def log_event(logger: logging.Logger, event_type: str, **fields: Any) -> None:
-    """Log a structured event with extra fields."""
+    """Log a structured event with extra fields.
+
+    Usage: log_event(log, "tool_call", tool="read_file", duration_ms=42)
+    """
     record = logger.makeRecord(
         logger.name, logging.INFO, "(unknown)", 0, event_type, (), None,
     )

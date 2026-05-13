@@ -42,10 +42,13 @@ class MCPClient:
 
         Returns a list of MCP tool definitions (name, description, inputSchema).
         """
-        if self.config.command:
-            return await self._init_stdio()
-        elif self.config.url:
-            return await self._init_sse()
+        try:
+            if self.config.command:
+                return await self._init_stdio()
+            elif self.config.url:
+                return await self._init_sse()
+        except (FileNotFoundError, OSError) as e:
+            print(f"Warning: MCP server '{self.config.name}' not available: {e}")
         return []
 
     async def _init_stdio(self) -> list[dict]:

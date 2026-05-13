@@ -19,6 +19,7 @@ from weather_agents.core.config import AppConfig, load_config
 from weather_agents.core.llm import LLMClient
 from weather_agents.core.skill import global_skill_registry
 from weather_agents.core.tool import global_registry
+from weather_agents.plugins.loader import PluginLoader
 from weather_agents.skills.loader import register_all_skills
 from weather_agents.tools.builtin import register_builtin_tools
 
@@ -58,11 +59,17 @@ class SystemContext:
 
 
 def create_system_context() -> SystemContext:
-    """Bootstrap the full system: config, bus, LLM, tools, skills, agents."""
+    """Bootstrap the full system: config, bus, LLM, tools, skills, plugins, agents."""
     config = load_config()
     bus = MessageBus()
     register_builtin_tools()
     register_all_skills()
+
+    # Load plugins
+    plugin_loader = PluginLoader(global_registry)
+    plugin_dirs = config.plugins.directories if config.plugins.enabled else []
+    plugin_loader.load_from_directories(plugin_dirs)
+
     llm = LLMClient(config, global_registry)
     agents = {
         name: cls(

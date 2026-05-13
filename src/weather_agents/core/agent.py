@@ -288,6 +288,7 @@ class BaseAgent(ABC):
         ))
 
     def get_status(self) -> dict:
+        usage = self.llm.get_usage_stats().get(self.name, {})
         return {
             "name": self.name,
             "display_name": self.display_name,
@@ -295,4 +296,10 @@ class BaseAgent(ABC):
             "specialty": self.specialty,
             "state": self.state.value,
             "skills": self.get_available_skills(),
+            "usage": {
+                "calls": usage.get("calls", 0),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "cost": round(usage.get("cost", 0.0), 6),
+            },
         }

@@ -49,6 +49,7 @@ class LLMConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 120
+    max_retries: int = 2
     api_keys: dict[str, str] = field(default_factory=dict)
 
 

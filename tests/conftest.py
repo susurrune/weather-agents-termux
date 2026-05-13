@@ -37,6 +37,8 @@ def mock_llm():
         usage={"prompt_tokens": 10, "completion_tokens": 5},
     ))
     llm.stream = AsyncMock()
+    llm.get_usage_stats = Mock(return_value={})
+    llm.get_total_cost = Mock(return_value=0.0)
     return llm
 
 

@@ -93,46 +93,69 @@ class SnowAgent(BaseAgent):
 
         return tasks
 
-    async def orchestrate_with_results(self, goal: str, agents: dict) -> dict:
-        """Decompose, dispatch, execute, and collect results in parallel.
+    async def orchestrate_with_results(self, goal: str, agents: dict, max_iterations: int = 3) -> dict:
+        """Decompose, dispatch, execute, and collect results with iterative refinement.
 
-        Respects task dependencies: independent tasks run concurrently via gather().
+        If any tasks fail, Snow re-plans the failed portion and retries.
+        Continues up to max_iterations rounds.
         Returns a dict with tasks, results and a Snow-generated summary.
         """
-        tasks = await self.orchestrate(goal)
+        all_tasks: list[Task] = []
+        all_results: dict[str, dict] = {}
+        context = goal
 
-        results: dict[str, dict] = {}
-        pending = [t for t in tasks if t.assigned_to and t.assigned_to != self.name]
-        completed: set[str] = set()
+        for iteration in range(max_iterations):
+            if iteration > 0:
+                # Re-plan: ask Snow to refine the failed tasks
+                failed = [r for r in all_results.values() if not r["success"]]
+                if not failed:
+                    break
+                context = self._build_refinement_prompt(goal, failed)
 
-        async def _run(t: Task) -> None:
-            agent = agents.get(t.assigned_to)
-            if not agent:
-                return
-            result = await agent.execute_task(t)
-            results[t.id] = {
-                "id": t.id,
-                "agent": t.assigned_to,
-                "description": t.description,
-                "success": result.success,
-                "content": result.content,
-            }
-            if result.success:
-                completed.add(t.id)
+            tasks = await self.orchestrate(context)
 
-        while pending:
-            # Tasks whose dependencies are satisfied run in parallel
-            batch = [t for t in pending if not t.parent_id or t.parent_id in completed]
-            if not batch:
-                batch = pending[:1]  # deadlock fallback
+            if iteration == 0:
+                all_tasks = tasks
+            else:
+                all_tasks.extend(tasks)
 
-            for t in batch:
-                pending.remove(t)
+            pending = [t for t in tasks if t.assigned_to and t.assigned_to != self.name]
+            completed: set[str] = set()
 
-            await asyncio.gather(*[_run(t) for t in batch])
+            async def _run(t: Task) -> None:
+                agent = agents.get(t.assigned_to)
+                if not agent:
+                    return
+                result = await agent.execute_task(t)
+                all_results[t.id] = {
+                    "id": t.id,
+                    "agent": t.assigned_to,
+                    "description": t.description,
+                    "success": result.success,
+                    "content": result.content,
+                }
+                if result.success:
+                    completed.add(t.id)
 
-        summary = await self._generate_summary(goal, results)
-        return {"tasks": tasks, "results": results, "summary": summary}
+            while pending:
+                batch = [t for t in pending if not t.parent_id or t.parent_id in completed]
+                if not batch:
+                    batch = pending[:1]
+                for t in batch:
+                    pending.remove(t)
+                await asyncio.gather(*[_run(t) for t in batch])
+
+        summary = await self._generate_summary(goal, all_results)
+        return {"tasks": all_tasks, "results": all_results, "summary": summary, "iterations": iteration + 1}
+
+    def _build_refinement_prompt(self, goal: str, failed: list[dict]) -> str:
+        """Build a prompt asking Snow to re-plan failed subtasks."""
+        parts = [f"原始目标: {goal}\n\n以下子任务执行失败，请重新规划如何完成这些部分：\n"]
+        for f in failed:
+            parts.append(f"- 任务 {f['id']} ({f['agent']}): {f['description']}")
+            parts.append(f"  错误: {f['content'][:200]}")
+        parts.append("\n请输出新的任务计划 JSON。")
+        return "\n".join(parts)
 
     async def _generate_summary(self, goal: str, results: dict) -> str:
         """Generate a summary of all task results."""
