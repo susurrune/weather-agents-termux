@@ -8,6 +8,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
+import os
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 import litellm
 
 from weather_agents.core.cache import LLMCache
