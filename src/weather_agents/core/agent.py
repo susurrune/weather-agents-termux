@@ -6,7 +6,7 @@ import json
 from abc import ABC
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from weather_agents.core.bus import Event, EventType, MessageBus
 from weather_agents.core.config import AppConfig
@@ -182,19 +182,31 @@ class BaseAgent(ABC):
                 },
             ))
 
-    async def chat(self, message: str) -> str:
-        """General-purpose chat mode."""
+    async def chat(
+        self,
+        message: str,
+        on_status: Callable[[str], None] | None = None,
+    ) -> str:
+        """General-purpose chat mode with optional status callback.
+
+        Args:
+            message: User message.
+            on_status: Called with a status string when state changes
+                       (e.g. "thinking...", "calling read_file...").
+        """
         await self._set_state(AgentState.THINKING)
         self.memory.add_message("user", message)
 
         try:
-            response = await self._llm_loop()
+            if on_status:
+                on_status("thinking...")
+            response = await self._llm_loop(on_status=on_status)
             self.memory.add_message("assistant", response.content)
             await self._set_state(AgentState.IDLE)
             return response.content
         except Exception as e:
             await self._set_state(AgentState.ERROR)
-            error_msg = f"[{self.display_name}] 出错了: {e}"
+            error_msg = f"[{self.display_name}] Error: {e}"
             self.memory.add_message("assistant", error_msg)
             return error_msg
 
@@ -217,39 +229,18 @@ class BaseAgent(ABC):
             await self._set_state(AgentState.ERROR)
             yield f"\n[Error: {e}]"
 
-    async def execute_task(self, task: Task) -> TaskResult:
-        """Execute a specific task using agent specialty."""
-        await self._set_state(AgentState.THINKING)
-        task.status = "in_progress"
-        self.memory.set_working("current_task", task)
-
-        prompt = f"请完成以下任务: {task.description}"
-        if task.metadata:
-            ctx_data = {k: v for k, v in task.metadata.items() if k != "goal"}
-            if ctx_data:
-                prompt += f"\n附加信息: {json.dumps(ctx_data, ensure_ascii=False)}"
-
-        self.memory.add_message("user", prompt)
-
-        try:
-            response = await self._llm_loop()
-            self.memory.add_message("assistant", response.content)
-            task.status = "completed"
-            task.result = response.content
-            await self._set_state(AgentState.IDLE)
-            return TaskResult(success=True, content=response.content)
-        except Exception as e:
-            task.status = "failed"
-            task.result = str(e)
-            await self._set_state(AgentState.ERROR)
-            return TaskResult(success=False, content=str(e))
-
-    async def _llm_loop(self, max_iterations: int = 10) -> LLMResponse:
+    async def _llm_loop(
+        self,
+        max_iterations: int = 10,
+        on_status: Callable[[str], None] | None = None,
+    ) -> LLMResponse:
         """LLM reasoning loop with tool calling support."""
         response = LLMResponse(content="")
 
         for _ in range(max_iterations):
             messages = self.memory.get_messages()
+            if on_status:
+                on_status("thinking...")
             response = await self.llm.complete(
                 messages=messages,
                 agent_name=self.name,
@@ -273,12 +264,16 @@ class BaseAgent(ABC):
 
             for tc in response.tool_calls:
                 tool = self.tool_registry.get(tc["name"])
+                tool_label = _tool_status_label(tc["name"], tc["arguments"])
 
                 self.bus.add_event(Event(
                     type=EventType.TOOL_CALL,
                     source=self.name,
                     data={"tool": tc["name"], "args": tc["arguments"]},
                 ))
+
+                if on_status:
+                    on_status(tool_label)
 
                 if tool:
                     await self._set_state(AgentState.ACTING)
@@ -298,6 +293,37 @@ class BaseAgent(ABC):
             await self._set_state(AgentState.THINKING)
 
         return response
+
+    async def execute_task(
+        self,
+        task: Task,
+        on_status: Callable[[str], None] | None = None,
+    ) -> TaskResult:
+        """Execute a specific task using agent specialty."""
+        await self._set_state(AgentState.THINKING)
+        task.status = "in_progress"
+        self.memory.set_working("current_task", task)
+
+        prompt = f"Please complete this task: {task.description}"
+        if task.metadata:
+            ctx_data = {k: v for k, v in task.metadata.items() if k != "goal"}
+            if ctx_data:
+                prompt += f"\nContext: {json.dumps(ctx_data, ensure_ascii=False)}"
+
+        self.memory.add_message("user", prompt)
+
+        try:
+            response = await self._llm_loop(on_status=on_status)
+            self.memory.add_message("assistant", response.content)
+            task.status = "completed"
+            task.result = response.content
+            await self._set_state(AgentState.IDLE)
+            return TaskResult(success=True, content=response.content)
+        except Exception as e:
+            task.status = "failed"
+            task.result = str(e)
+            await self._set_state(AgentState.ERROR)
+            return TaskResult(success=False, content=str(e))
 
     async def request_help(self, target_agent: str, description: str) -> None:
         """Request another agent's assistance."""
@@ -324,3 +350,40 @@ class BaseAgent(ABC):
                 "cost": round(usage.get("cost", 0.0), 6),
             },
         }
+
+
+# -- Helpers ---------------------------------------------------------------
+
+_TOOL_LABELS: dict[str, str] = {
+    "read_file": "Reading {path}",
+    "write_file": "Writing {path}",
+    "edit_file": "Editing {path}",
+    "list_directory": "Listing {path}",
+    "file_search": "Searching {directory}/{pattern}",
+    "code_search": "Searching for '{query}'",
+    "shell_exec": "Running: {command}",
+    "http_get": "GET {url}",
+    "http_post": "POST {url}",
+    "web_search": "Searching: {query}",
+    "move_file": "Moving {src}",
+    "copy_file": "Copying {src}",
+    "delete_file": "Deleting {path}",
+    "get_cwd": "Getting working directory",
+    "tree": "Tree {directory}",
+}
+
+
+def _tool_status_label(name: str, args: dict) -> str:
+    """Build a human-readable one-liner for a tool call."""
+    template = _TOOL_LABELS.get(name)
+    if template:
+        try:
+            label = template.format_map(args)
+        except (KeyError, IndexError):
+            label = f"{name}..."
+    else:
+        label = f"{name}..."
+    # Truncate long labels
+    if len(label) > 60:
+        label = label[:57] + "..."
+    return label

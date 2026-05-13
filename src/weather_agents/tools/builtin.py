@@ -50,6 +50,113 @@ async def _edit_file(path: str, old_text: str, new_text: str, **kwargs) -> str:
 
 # -- Search Tools --
 
+async def _list_directory(path: str = ".", **kwargs) -> str:
+    """List files and directories with basic metadata."""
+    try:
+        entries = []
+        for entry in sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name)):
+            if entry.is_dir():
+                entries.append(f"  [dir]  {entry.name}/")
+            else:
+                try:
+                    size = entry.stat().st_size
+                    if size < 1024:
+                        size_str = f"{size}B"
+                    elif size < 1024 * 1024:
+                        size_str = f"{size / 1024:.1f}KB"
+                    else:
+                        size_str = f"{size / 1024 / 1024:.1f}MB"
+                    entries.append(f"  {size_str:>8}  {entry.name}")
+                except OSError:
+                    entries.append(f"           {entry.name}")
+        if not entries:
+            return f"Empty directory: {path}"
+        header = f"Directory: {os.path.abspath(path)} ({len(entries)} items)\n"
+        return header + "\n".join(entries)
+    except FileNotFoundError:
+        return f"Error: Directory not found: {path}"
+    except PermissionError:
+        return f"Error: Permission denied: {path}"
+    except Exception as e:
+        return f"Error listing directory: {e}"
+
+
+async def _tree(directory: str = ".", max_depth: int = 3, **kwargs) -> str:
+    """Show directory tree structure."""
+    lines = []
+    try:
+        base = os.path.abspath(directory)
+        lines.append(base)
+        _tree_walk(base, "", lines, 0, int(max_depth))
+        if len(lines) > 200:
+            lines = lines[:200]
+            lines.append("... (truncated)")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def _tree_walk(path: str, prefix: str, lines: list, depth: int, max_depth: int) -> None:
+    if depth >= max_depth or len(lines) > 200:
+        return
+    try:
+        entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name))
+    except PermissionError:
+        return
+    # Filter hidden dirs
+    entries = [e for e in entries if not e.name.startswith(".")]
+    for i, entry in enumerate(entries):
+        is_last = i == len(entries) - 1
+        connector = "+-" if is_last else "|-"
+        lines.append(f"{prefix}{connector} {entry.name}{'/' if entry.is_dir() else ''}")
+        if entry.is_dir():
+            extension = "   " if is_last else "|  "
+            _tree_walk(entry.path, prefix + extension, lines, depth + 1, max_depth)
+
+
+async def _move_file(src: str, dst: str, **kwargs) -> str:
+    """Move or rename a file or directory."""
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+        shutil.move(src, dst)
+        return f"Moved: {src} -> {dst}"
+    except Exception as e:
+        return f"Error moving: {e}"
+
+
+async def _copy_file(src: str, dst: str, **kwargs) -> str:
+    """Copy a file or directory."""
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+        return f"Copied: {src} -> {dst}"
+    except Exception as e:
+        return f"Error copying: {e}"
+
+
+async def _delete_file(path: str, **kwargs) -> str:
+    """Delete a file or empty directory (non-recursive for safety)."""
+    try:
+        if os.path.isdir(path):
+            os.rmdir(path)
+            return f"Deleted directory: {path}"
+        else:
+            os.remove(path)
+            return f"Deleted: {path}"
+    except OSError as e:
+        return f"Error deleting: {e}"
+
+
+async def _get_cwd(**kwargs) -> str:
+    """Return current working directory."""
+    return os.getcwd()
+
+
 async def _file_search(directory: str, pattern: str, **kwargs) -> str:
     import glob
 
@@ -354,6 +461,64 @@ def register_builtin_tools() -> None:
                 ),
             ],
             handler=_web_search,
+        ),
+        Tool(
+            name="list_directory",
+            description="List files and directories with sizes. Defaults to current directory.",
+            parameters=[
+                ToolParameter(
+                    name="path", type="string", description="Directory path (default: '.')",
+                    required=False, default=".",
+                ),
+            ],
+            handler=_list_directory,
+        ),
+        Tool(
+            name="tree",
+            description="Show directory tree structure (non-hidden files, configurable depth)",
+            parameters=[
+                ToolParameter(
+                    name="directory", type="string", description="Root directory (default: '.')",
+                    required=False, default=".",
+                ),
+                ToolParameter(
+                    name="max_depth", type="number", description="Max depth (default: 3)",
+                    required=False, default=3,
+                ),
+            ],
+            handler=_tree,
+        ),
+        Tool(
+            name="move_file",
+            description="Move or rename a file or directory",
+            parameters=[
+                ToolParameter(name="src", type="string", description="Source path"),
+                ToolParameter(name="dst", type="string", description="Destination path"),
+            ],
+            handler=_move_file,
+        ),
+        Tool(
+            name="copy_file",
+            description="Copy a file or directory tree",
+            parameters=[
+                ToolParameter(name="src", type="string", description="Source path"),
+                ToolParameter(name="dst", type="string", description="Destination path"),
+            ],
+            handler=_copy_file,
+        ),
+        Tool(
+            name="delete_file",
+            description="Delete a file or empty directory (non-recursive for safety)",
+            parameters=[
+                ToolParameter(name="path", type="string", description="File or directory to delete"),
+            ],
+            handler=_delete_file,
+        ),
+        Tool(
+            name="get_cwd",
+            description="Get the current working directory path",
+            parameters=[],
+            handler=_get_cwd,
         ),
     ]
 
