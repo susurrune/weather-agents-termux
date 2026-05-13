@@ -20,6 +20,7 @@ from weather_agents.core.config import (
     _sync_api_keys_to_env,
     USER_CONFIG_DIR,
 )
+from weather_agents import __version__
 from weather_agents.core.factory import create_system_context, AGENT_CLASSES, AGENT_EMOJI
 
 
@@ -52,20 +53,20 @@ async def _interactive(agent_name: str | None = None) -> None:
 
     try:
         agents = ctx.agent_map
-        console.print(Panel(
-            "[bold]Weather Agents[/bold] — 多智能体万能工具\n\n"
-            "[cyan]切换[/cyan]  /fog /rain /frost /snow /dew\n"
-            "[cyan]编排[/cyan]  /task <目标>  — Snow 分解并协调多 Agent 完成\n"
-            "[cyan]技能[/cyan]  /skills 查看  /use <技能> 激活  /deactivate 关闭\n"
-            "[cyan]模型[/cyan]  /model [名称]  — 查看或切换模型\n"
-            "[cyan]密钥[/cyan]  /apikey  — 管理 API Key（查看/添加/删除）\n"
-            "[cyan]信息[/cyan]  /status 状态  /cost 费用  /history 事件\n"
-            "[cyan]MCP[/cyan]   /mcp 查看 MCP 服务器状态\n"
-            "[cyan]其他[/cyan]  /clear 清屏  /quit 退出",
-            title="Welcome", border_style="cyan",
-        ))
         current = agent_name or "fog"
         agent = agents[current]
+        model = ctx.config.llm.default_model
+        agent_line = "  ".join(
+            f"{AGENT_EMOJI[n]} {cls.display_name}" for n, cls in AGENT_CLASSES.items()
+        )
+        console.print()
+        console.print(
+            f"  [bold]Weather Agents[/bold] [dim]v{__version__}[/dim]  "
+            f"[dim]model:[/dim] [cyan]{model}[/cyan]"
+        )
+        console.print(f"  [dim]{agent_line}[/dim]")
+        console.print(f"  [dim]输入 [bold]/help[/bold] 查看所有命令[/dim]")
+        console.print()
 
         while True:
             try:
@@ -80,6 +81,9 @@ async def _interactive(agent_name: str | None = None) -> None:
 
             if cmd_lower in ("/quit", "/exit"):
                 break
+            if cmd_lower in ("/help", "/?"):
+                _print_help()
+                continue
             if cmd_lower == "/clear":
                 console.clear()
                 continue
@@ -126,10 +130,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 console.print(f"→ {agent.emoji} {agent.display_name}")
                 continue
             if cmd_lower.startswith("/"):
-                console.print(
-                    "[dim]命令: /fog /rain /frost /snow /dew /task /skills /use "
-                    "/deactivate /status /cost /history /mcp /model /apikey /clear /quit[/dim]"
-                )
+                _print_help()
                 continue
 
             # Streaming chat
@@ -146,6 +147,29 @@ async def _interactive(agent_name: str | None = None) -> None:
     finally:
         console.print("[dim]正在关闭...[/dim]")
         await ctx.close_all()
+
+
+def _print_help() -> None:
+    tbl = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    tbl.add_column(style="bold cyan", width=24)
+    tbl.add_column(style="dim")
+    tbl.add_row("/fog /rain /frost /snow /dew", "切换 Agent")
+    tbl.add_row("/task <目标>", "多 Agent 协作编排")
+    tbl.add_row("/model [名称]", "查看或切换模型")
+    tbl.add_row("/model <agent> <模型>", "指定 Agent 模型")
+    tbl.add_row("/apikey", "查看 API Key")
+    tbl.add_row("/apikey set <provider> <key>", "添加/替换 Key")
+    tbl.add_row("/apikey del <provider>", "删除 Key")
+    tbl.add_row("/skills", "查看可用技能")
+    tbl.add_row("/use <技能>", "激活技能")
+    tbl.add_row("/deactivate", "关闭所有技能")
+    tbl.add_row("/status", "Agent 状态")
+    tbl.add_row("/cost", "Token 用量和费用")
+    tbl.add_row("/history", "事件日志")
+    tbl.add_row("/mcp", "MCP 服务器状态")
+    tbl.add_row("/clear", "清屏")
+    tbl.add_row("/quit", "退出")
+    console.print(tbl)
 
 
 def _print_status(agents: dict) -> None:
