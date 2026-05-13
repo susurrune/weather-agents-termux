@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import sys
 
 import typer
 from rich.console import Console
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -56,16 +62,7 @@ async def _interactive(agent_name: str | None = None) -> None:
         current = agent_name or "fog"
         agent = agents[current]
         model = ctx.config.llm.default_model
-        agent_line = "  ".join(
-            f"{AGENT_EMOJI[n]} {cls.display_name}" for n, cls in AGENT_CLASSES.items()
-        )
-        console.print()
-        console.print(
-            f"  [bold]Weather Agents[/bold] [dim]v{__version__}[/dim]  "
-            f"[dim]model:[/dim] [cyan]{model}[/cyan]"
-        )
-        console.print(f"  [dim]{agent_line}[/dim]")
-        console.print(f"  [dim]输入 [bold]/help[/bold] 查看所有命令[/dim]")
+        _print_welcome(model)
         console.print()
 
         while True:
@@ -147,6 +144,62 @@ async def _interactive(agent_name: str | None = None) -> None:
     finally:
         console.print("[dim]正在关闭...[/dim]")
         await ctx.close_all()
+
+
+def _print_welcome(model: str) -> None:
+    from rich.text import Text
+
+    console.print()
+    logo = (
+        "[bold bright_white]"
+        "        .  *  .       . *  .  *       *  .  *  .  \n"
+        "     *        *    *         *    .         *      \n"
+        "   ~  W E A T H E R   A G E N T S  ~             \n"
+        "     .        .    .         .    *         .      \n"
+        "        *  .  *       * .  *  .       .  *  .      \n"
+        "[/bold bright_white]"
+    )
+    console.print(logo, justify="center")
+
+    agents_info = [
+        ("🌫", "雾", "Fog",   "探索研究", "bright_white", "~ ~ ~"),
+        ("🌧", "雨", "Rain",  "生成创造", "blue",         "' ' '"),
+        ("❄",  "霜", "Frost", "审查优化", "cyan",         "* + *"),
+        ("🌨", "雪", "Snow",  "规划编排", "bright_white", ". * ."),
+        ("💧", "露", "Dew",   "运维集成", "green",        "o o o"),
+    ]
+
+    tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+    for _ in agents_info:
+        tbl.add_column(justify="center", ratio=1)
+
+    icon_row = []
+    name_row = []
+    role_row = []
+    deco_row = []
+    for emoji, cn, en, role, color, deco in agents_info:
+        icon_row.append(Text(emoji, style=f"bold {color}"))
+        name_row.append(Text(f"{cn} {en}", style=f"bold {color}"))
+        role_row.append(Text(role, style="dim"))
+        deco_row.append(Text(deco, style=f"dim {color}"))
+
+    tbl.add_row(*deco_row)
+    tbl.add_row(*icon_row)
+    tbl.add_row(*name_row)
+    tbl.add_row(*role_row)
+
+    console.print(tbl)
+    console.print()
+
+    status_line = Text(justify="center")
+    status_line.append("  model: ", style="dim")
+    status_line.append(model, style="cyan")
+    status_line.append("  |  ", style="dim")
+    status_line.append(f"v{__version__}", style="dim")
+    status_line.append("  |  ", style="dim")
+    status_line.append("/help", style="bold dim")
+    status_line.append(" 查看命令", style="dim")
+    console.print(status_line, justify="center")
 
 
 def _print_help() -> None:
