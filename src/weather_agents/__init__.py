@@ -1,3 +1,7 @@
-"""Weather Agents - Multi-agent system with Fog, Rain, Frost, Snow, Dew."""
+"""Weather Agents — Multi-agent AI orchestration framework.
 
-__version__ = "0.3.0"
+Five specialized agents (Fog, Rain, Frost, Snow, Dew) collaborate
+through an event-driven message bus to accomplish complex tasks.
+"""
+
+__version__ = "1.0.0"

@@ -54,4 +54,8 @@ def temp_config_dir(tmp_path):
     user_cfg = tmp_path / ".weather-agents"
     user_cfg.mkdir()
     with patch("weather_agents.core.config.USER_CONFIG_DIR", user_cfg):
+        # Also invalidate cache to pick up new dir
+        from weather_agents.core.config import invalidate_cache
+        invalidate_cache()
         yield user_cfg
+        invalidate_cache()

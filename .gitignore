@@ -7,7 +7,6 @@ build/
 .eggs/
 *.egg
 *.so
-.env
 
 # Virtual environment
 .venv/
@@ -30,5 +29,10 @@ Thumbs.db
 htmlcov/
 .cache/
 
-# Config
+# Config & secrets
+.env
 config/*.secret.yaml
+
+# Data
+*.db
+*.sqlite3

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 from weather_agents.core.agent import BaseAgent, Task
 from weather_agents.core.bus import Event, EventType
@@ -50,7 +51,7 @@ class SnowAgent(BaseAgent):
       "description": "步骤描述",
       "agent": "fog|rain|frost|dew|snow",
       "depends_on": [],
-      "status": "pending"
+      "priority": "high|medium|low"
     }
   ]
 }
@@ -63,20 +64,18 @@ class SnowAgent(BaseAgent):
 
     async def orchestrate(self, goal: str) -> list[Task]:
         """Decompose a goal into tasks and dispatch to agents."""
-        prompt = f"""请将以下目标分解为子任务，并分配给合适的 Agent。
-
-目标: {goal}
-
-请严格按照 JSON 格式输出任务计划。"""
+        prompt = (
+            f"请将以下目标分解为子任务，并分配给合适的 Agent。\n\n"
+            f"目标: {goal}\n\n"
+            f"请严格按照 JSON 格式输出任务计划。"
+        )
 
         self.memory.add_message("user", prompt)
         response = await self._llm_loop()
         self.memory.add_message("assistant", response.content)
 
-        # Parse task plan from response
         tasks = self._parse_task_plan(response.content, goal)
 
-        # Dispatch tasks
         for task in tasks:
             if task.assigned_to and task.assigned_to != self.name:
                 await self.bus.publish(Event(
@@ -93,20 +92,20 @@ class SnowAgent(BaseAgent):
 
         return tasks
 
-    async def orchestrate_with_results(self, goal: str, agents: dict, max_iterations: int = 3) -> dict:
-        """Decompose, dispatch, execute, and collect results with iterative refinement.
-
-        If any tasks fail, Snow re-plans the failed portion and retries.
-        Continues up to max_iterations rounds.
-        Returns a dict with tasks, results and a Snow-generated summary.
-        """
+    async def orchestrate_with_results(
+        self,
+        goal: str,
+        agents: dict,
+        max_iterations: int = 3,
+    ) -> dict:
+        """Decompose, dispatch, execute, and collect results with retry on failure."""
         all_tasks: list[Task] = []
         all_results: dict[str, dict] = {}
         context = goal
+        iteration = 0
 
         for iteration in range(max_iterations):
             if iteration > 0:
-                # Re-plan: ask Snow to refine the failed tasks
                 failed = [r for r in all_results.values() if not r["success"]]
                 if not failed:
                     break
@@ -137,8 +136,12 @@ class SnowAgent(BaseAgent):
                 if result.success:
                     completed.add(t.id)
 
+            # Execute with dependency ordering
             while pending:
-                batch = [t for t in pending if not t.parent_id or t.parent_id in completed]
+                batch = [
+                    t for t in pending
+                    if not t.parent_id or t.parent_id in completed
+                ]
                 if not batch:
                     batch = pending[:1]
                 for t in batch:
@@ -146,11 +149,15 @@ class SnowAgent(BaseAgent):
                 await asyncio.gather(*[_run(t) for t in batch])
 
         summary = await self._generate_summary(goal, all_results)
-        return {"tasks": all_tasks, "results": all_results, "summary": summary, "iterations": iteration + 1}
+        return {
+            "tasks": all_tasks,
+            "results": all_results,
+            "summary": summary,
+            "iterations": iteration + 1,
+        }
 
     def _build_refinement_prompt(self, goal: str, failed: list[dict]) -> str:
-        """Build a prompt asking Snow to re-plan failed subtasks."""
-        parts = [f"原始目标: {goal}\n\n以下子任务执行失败，请重新规划如何完成这些部分：\n"]
+        parts = [f"原始目标: {goal}\n\n以下子任务执行失败，请重新规划：\n"]
         for f in failed:
             parts.append(f"- 任务 {f['id']} ({f['agent']}): {f['description']}")
             parts.append(f"  错误: {f['content'][:200]}")
@@ -158,13 +165,14 @@ class SnowAgent(BaseAgent):
         return "\n".join(parts)
 
     async def _generate_summary(self, goal: str, results: dict) -> str:
-        """Generate a summary of all task results."""
         prompt = f"以下是任务「{goal}」的各子任务执行结果，请给出整体总结报告：\n\n"
         for tid, r in results.items():
             status = "✅ 成功" if r["success"] else "❌ 失败"
-            prompt += f"## 任务 {tid} ({r['agent']}) - {status}\n"
-            prompt += f"描述: {r['description']}\n"
-            prompt += f"结果:\n{r['content'][:500]}\n\n"
+            prompt += (
+                f"## 任务 {tid} ({r['agent']}) - {status}\n"
+                f"描述: {r['description']}\n"
+                f"结果:\n{r['content'][:500]}\n\n"
+            )
 
         self.memory.add_message("user", prompt)
         response = await self._llm_loop()
@@ -172,26 +180,65 @@ class SnowAgent(BaseAgent):
         return response.content
 
     def _parse_task_plan(self, content: str, goal: str) -> list[Task]:
-        """Extract task plan from LLM response."""
-        # Try to find JSON in response
+        """Extract task plan from LLM response with robust JSON parsing."""
+        # Try to extract JSON from markdown code blocks first
+        json_str = self._extract_json(content)
+        if json_str:
+            try:
+                plan = json.loads(json_str)
+                tasks = self._plan_to_tasks(plan, goal)
+                if tasks is not None:
+                    return tasks
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Try to find raw JSON in response
         try:
-            # Look for JSON block
             start = content.find("{")
             end = content.rfind("}") + 1
             if start >= 0 and end > start:
                 plan = json.loads(content[start:end])
-                tasks = []
-                for step in plan.get("steps", []):
-                    tasks.append(Task(
-                        id=str(step.get("id", len(tasks) + 1)),
-                        description=step.get("description", ""),
-                        assigned_to=step.get("agent"),
-                        parent_id=step.get("depends_on", [None])[0] if step.get("depends_on") else None,
-                        metadata={"goal": goal},
-                    ))
-                return tasks
+                tasks = self._plan_to_tasks(plan, goal)
+                if tasks is not None:
+                    return tasks
         except (json.JSONDecodeError, KeyError):
             pass
 
         # Fallback: single task for rain
         return [Task(id="1", description=goal, assigned_to="rain", metadata={"goal": goal})]
+
+    @staticmethod
+    def _extract_json(content: str) -> str | None:
+        """Extract JSON from markdown code blocks."""
+        patterns = [
+            re.compile(r"```json\s*\n(.*?)\n```", re.DOTALL),
+            re.compile(r"```\s*\n(\{.*?\})\n```", re.DOTALL),
+        ]
+        for pattern in patterns:
+            match = pattern.search(content)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    @staticmethod
+    def _plan_to_tasks(plan: dict, goal: str) -> list[Task]:
+        """Convert a parsed plan dict to Task objects."""
+        valid_agents = {"fog", "rain", "frost", "snow", "dew"}
+        tasks = []
+        for step in plan.get("steps", []):
+            agent = step.get("agent", "rain")
+            if agent not in valid_agents:
+                agent = "rain"
+            depends = step.get("depends_on", [])
+            parent_id = depends[0] if depends else None
+            tasks.append(Task(
+                id=str(step.get("id", len(tasks) + 1)),
+                description=step.get("description", ""),
+                assigned_to=agent,
+                parent_id=parent_id,
+                metadata={
+                    "goal": goal,
+                    "priority": step.get("priority", "medium"),
+                },
+            ))
+        return tasks

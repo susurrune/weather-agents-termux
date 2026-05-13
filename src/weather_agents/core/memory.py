@@ -15,7 +15,7 @@ from weather_agents.core.config import MemoryConfig
 
 @dataclass
 class Message:
-    role: str  # "user", "assistant", "system", "tool"
+    role: str
     content: str
     name: str | None = None
     tool_call_id: str | None = None
@@ -24,9 +24,9 @@ class Message:
 class Memory:
     """Three-layer memory for each agent with SQLite persistence.
 
-    Short-term memory persists messages to SQLite so conversation history
-    survives agent restart. Working memory is in-memory (task-scoped).
-    Long-term memory uses key-value storage in SQLite.
+    - Short-term: conversation context (persisted to SQLite)
+    - Working: in-memory task-scoped state
+    - Long-term: persistent key-value storage with search
     """
 
     def __init__(self, config: MemoryConfig, agent_name: str) -> None:
@@ -49,12 +49,30 @@ class Memory:
                 agent TEXT NOT NULL,
                 key TEXT NOT NULL,
                 value TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                category TEXT DEFAULT 'general',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Migrate existing DBs that lack the category/updated_at columns
+        try:
+            await self._db.execute(
+                "ALTER TABLE memories ADD COLUMN category TEXT DEFAULT 'general'"
+            )
+        except Exception:
+            pass
+        try:
+            await self._db.execute(
+                "ALTER TABLE memories ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            )
+        except Exception:
+            pass
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_key ON memories(agent, key)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_category ON memories(agent, category)"
         )
         await self._db.execute(
             """
@@ -76,7 +94,6 @@ class Memory:
         await self._load_short_term()
 
     async def _load_short_term(self) -> None:
-        """Load recent messages from SQLite into in-memory short_term."""
         if not self._db or self._loaded:
             return
         cursor = await self._db.execute(
@@ -85,7 +102,6 @@ class Memory:
             (self.agent_name, self.config.short_term_limit),
         )
         rows = await cursor.fetchall()
-        # Reverse to get chronological order
         for row in reversed(rows):
             self.short_term.append(
                 Message(role=row[0], content=row[1], name=row[2], tool_call_id=row[3])
@@ -93,7 +109,6 @@ class Memory:
         self._loaded = True
 
     async def _flush_pending(self) -> None:
-        """Wait for any pending persist tasks to complete."""
         if self._pending_persists:
             await asyncio.gather(*self._pending_persists, return_exceptions=True)
             self._pending_persists.clear()
@@ -111,35 +126,40 @@ class Memory:
     # -- Short-term memory (conversation context, persisted) --
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
-        self.short_term.append(Message(role=role, content=content, **kwargs))
+        msg = Message(role=role, content=content)
+        if "name" in kwargs:
+            msg.name = kwargs["name"]
+        if "tool_call_id" in kwargs:
+            msg.tool_call_id = kwargs["tool_call_id"]
+        self.short_term.append(msg)
+
         if len(self.short_term) > self.config.short_term_limit:
             system_msgs = [m for m in self.short_term if m.role == "system"]
             other_msgs = [m for m in self.short_term if m.role != "system"]
             keep = self.config.short_term_limit - len(system_msgs)
             self.short_term = system_msgs + other_msgs[-keep:]
-        # Persist to SQLite (non-blocking fire-and-forget)
+
         if self._db and role != "system":
-            name = kwargs.get("name")
-            tool_call_id = kwargs.get("tool_call_id")
             task = asyncio.ensure_future(
-                self._persist_message(role, content, name, tool_call_id)
+                self._persist_message(role, content, msg.name, msg.tool_call_id)
             )
             self._pending_persists.add(task)
             task.add_done_callback(self._pending_persists.discard)
 
     async def _persist_message(
-        self, role: str, content: str, name: str | None, tool_call_id: str | None
+        self, role: str, content: str, name: str | None, tool_call_id: str | None,
     ) -> None:
         if not self._db:
             return
         try:
             await self._db.execute(
-                "INSERT INTO messages (agent, role, content, name, tool_call_id) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO messages (agent, role, content, name, tool_call_id) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (self.agent_name, role, content, name, tool_call_id),
             )
             await self._db.commit()
         except Exception:
-            pass  # Persistence failures are non-critical
+            pass
 
     def get_messages(self) -> list[dict]:
         msgs = []
@@ -151,6 +171,16 @@ class Memory:
                 d["tool_call_id"] = m.tool_call_id
             msgs.append(d)
         return msgs
+
+    def get_context_window_usage(self) -> dict:
+        """Return stats about current memory usage."""
+        total_chars = sum(len(m.content) for m in self.short_term)
+        return {
+            "message_count": len(self.short_term),
+            "total_chars": total_chars,
+            "estimated_tokens": total_chars // 4,
+            "limit": self.config.short_term_limit,
+        }
 
     async def clear_short_term(self) -> None:
         system_msgs = [m for m in self.short_term if m.role == "system"]
@@ -173,32 +203,57 @@ class Memory:
     def clear_working(self) -> None:
         self.working.clear()
 
-    # -- Long-term memory (persistent key-value) --
+    # -- Long-term memory (persistent key-value with categories) --
 
-    async def remember(self, key: str, value: Any) -> None:
+    async def remember(self, key: str, value: Any, category: str = "general") -> None:
         if not self._db:
             return
-        await self._db.execute(
-            "INSERT OR REPLACE INTO memories (agent, key, value) VALUES (?, ?, ?)",
-            (self.agent_name, key, json.dumps(value, ensure_ascii=False)),
+        existing = await self._db.execute(
+            "SELECT id FROM memories WHERE agent = ? AND key = ?",
+            (self.agent_name, key),
         )
-        await self._db.commit()
-
-    async def recall(self, key: str | None = None, limit: int = 20) -> list[dict]:
-        if not self._db:
-            return []
-        if key:
-            cursor = await self._db.execute(
-                "SELECT key, value FROM memories WHERE agent = ? AND key LIKE ? ORDER BY created_at DESC LIMIT ?",
-                (self.agent_name, f"%{key}%", limit),
+        row = await existing.fetchone()
+        if row:
+            await self._db.execute(
+                "UPDATE memories SET value = ?, category = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE agent = ? AND key = ?",
+                (json.dumps(value, ensure_ascii=False), category, self.agent_name, key),
             )
         else:
-            cursor = await self._db.execute(
-                "SELECT key, value FROM memories WHERE agent = ? ORDER BY created_at DESC LIMIT ?",
-                (self.agent_name, limit),
+            await self._db.execute(
+                "INSERT INTO memories (agent, key, value, category) VALUES (?, ?, ?, ?)",
+                (self.agent_name, key, json.dumps(value, ensure_ascii=False), category),
             )
+        await self._db.commit()
+
+    async def recall(
+        self,
+        key: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        if not self._db:
+            return []
+
+        query = "SELECT key, value, category FROM memories WHERE agent = ?"
+        params: list[Any] = [self.agent_name]
+
+        if key:
+            query += " AND key LIKE ?"
+            params.append(f"%{key}%")
+        if category:
+            query += " AND category = ?"
+            params.append(category)
+
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
-        return [{"key": r[0], "value": json.loads(r[1])} for r in rows]
+        return [
+            {"key": r[0], "value": json.loads(r[1]), "category": r[2]}
+            for r in rows
+        ]
 
     async def forget(self, key: str) -> None:
         if not self._db:
@@ -208,3 +263,15 @@ class Memory:
             (self.agent_name, key),
         )
         await self._db.commit()
+
+    async def get_memory_stats(self) -> dict:
+        """Return statistics about long-term memory."""
+        if not self._db:
+            return {"total": 0, "categories": {}}
+        cursor = await self._db.execute(
+            "SELECT category, COUNT(*) FROM memories WHERE agent = ? GROUP BY category",
+            (self.agent_name,),
+        )
+        rows = await cursor.fetchall()
+        categories = {r[0]: r[1] for r in rows}
+        return {"total": sum(categories.values()), "categories": categories}

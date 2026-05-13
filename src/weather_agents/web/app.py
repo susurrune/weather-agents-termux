@@ -7,29 +7,28 @@ import json
 import time
 import uuid
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from weather_agents.core.config import load_config
 from weather_agents.core.bus import Event
-from weather_agents.core.tool import global_registry
-from weather_agents.core.mcp import MCPManager
+from weather_agents.core.config import load_config
 from weather_agents.core.factory import create_system_context
+from weather_agents.core.mcp import MCPManager
+from weather_agents.core.tool import global_registry
 from weather_agents.tools.builtin import register_builtin_tools
 
-# Optional API token for production auth (set env WA_API_TOKEN)
 _API_TOKEN: str | None = None
 
 
 def _check_api_token(authorization: str | None = None) -> str | None:
-    """Validate Bearer token if API auth is configured."""
     global _API_TOKEN
     if _API_TOKEN is None:
-        _API_TOKEN = __import__("os").environ.get("WA_API_TOKEN", "")
+        import os
+        _API_TOKEN = os.environ.get("WA_API_TOKEN", "")
     if not _API_TOKEN:
-        return None  # no auth configured
+        return None
     if not authorization:
         return "Missing Authorization header"
     scheme, _, token = authorization.partition(" ")
@@ -68,7 +67,6 @@ class SessionManager:
         self._cleanup_task: asyncio.Task | None = None
 
     def start_cleanup(self, interval: int = 300) -> None:
-        """Start background task that evicts expired sessions."""
         if self._cleanup_task is not None:
             return
 
@@ -91,7 +89,10 @@ class SessionManager:
     async def _evict_expired(self) -> None:
         now = time.monotonic()
         async with self._lock:
-            stale = [sid for sid, s in self._sessions.items() if now - s.last_used > self._session_ttl]
+            stale = [
+                sid for sid, s in self._sessions.items()
+                if now - s.last_used > self._session_ttl
+            ]
             for sid in stale:
                 session = self._sessions.pop(sid)
                 asyncio.ensure_future(session.close())
@@ -115,7 +116,6 @@ class SessionManager:
             await session.close()
 
     async def cleanup_stale(self) -> None:
-        """Remove all sessions (called on shutdown)."""
         await self.stop_cleanup()
         async with self._lock:
             sessions = list(self._sessions.values())
@@ -123,28 +123,21 @@ class SessionManager:
         for session in sessions:
             await session.close()
 
-    async def get_session_count(self) -> int:
-        async with self._lock:
-            return len(self._sessions)
 
-
-# Global instances
 session_manager = SessionManager()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Weather Agents", version="0.2.0")
+    app = FastAPI(title="Weather Agents", version="1.0.0")
 
     @app.on_event("startup")
     async def startup():
         register_builtin_tools()
         session_manager.start_cleanup()
-        # Initialize MCP servers globally
         config = load_config()
-        mcp_configs = getattr(config, "mcp", None)
-        if mcp_configs and mcp_configs.get("servers"):
+        if config.mcp.servers:
             mcp_manager = MCPManager(global_registry)
-            mcp_manager.configure(mcp_configs["servers"])
+            mcp_manager.configure(config.mcp.servers)
             try:
                 results = await mcp_manager.connect_all()
                 for r in results:
@@ -155,9 +148,6 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown():
         await session_manager.cleanup_stale()
-
-    # ── Auth dependency ─────────────────────────────────────────────────────
-    from fastapi import Depends
 
     async def verify_token(authorization: str | None = Header(None)):
         err = _check_api_token(authorization)
@@ -175,26 +165,43 @@ def create_app() -> FastAPI:
         session = await session_manager.get_or_create(x_session_id)
         agent = session.agents.get(agent_name)
         if not agent:
-            return {"error": "Agent not found"}
+            raise HTTPException(status_code=404, detail="Agent not found")
         return agent.get_status()
 
     @app.post("/api/agents/{agent_name}/chat", dependencies=[Depends(verify_token)])
-    async def chat_with_agent(agent_name: str, body: dict, x_session_id: str | None = Header(None)):
+    async def chat_with_agent(
+        agent_name: str, body: dict, x_session_id: str | None = Header(None),
+    ):
         session = await session_manager.get_or_create(x_session_id)
         agent = session.agents.get(agent_name)
         if not agent:
-            return {"error": "Agent not found"}
+            raise HTTPException(status_code=404, detail="Agent not found")
         message = body.get("message", "")
         response = await agent.chat(message)
         return {"agent": agent_name, "response": response, "session_id": session.id}
 
+    @app.post("/api/agents/{agent_name}/skills/{skill_name}", dependencies=[Depends(verify_token)])
+    async def toggle_skill(
+        agent_name: str, skill_name: str, x_session_id: str | None = Header(None),
+    ):
+        session = await session_manager.get_or_create(x_session_id)
+        agent = session.agents.get(agent_name)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        activated = agent.activate_skill(skill_name)
+        if not activated:
+            agent.deactivate_skill(skill_name)
+        return {"skill": skill_name, "active": activated}
+
     @app.post("/api/task", dependencies=[Depends(verify_token)])
-    async def orchestrate_task(body: dict, x_session_id: str | None = Header(None)):
+    async def orchestrate_task_endpoint(
+        body: dict, x_session_id: str | None = Header(None),
+    ):
         session = await session_manager.get_or_create(x_session_id)
         from weather_agents.core.factory import orchestrate_task as run_orch
+
         tasks, results, summary = await run_orch(
-            body.get("goal", ""),
-            session.agents,
+            body.get("goal", ""), session.agents,
         )
         return {
             "goal": body.get("goal", ""),
@@ -208,14 +215,19 @@ def create_app() -> FastAPI:
                 for t in tasks
             ],
             "results": [
-                {"id": r.id, "agent": r.agent, "success": r.success, "content": r.content}
+                {
+                    "id": r.id, "agent": r.agent,
+                    "success": r.success, "content": r.content,
+                }
                 for r in results
             ],
             "summary": summary,
         }
 
     @app.get("/api/history/{agent_name}", dependencies=[Depends(verify_token)])
-    async def get_history(agent_name: str, limit: int = 20, x_session_id: str | None = Header(None)):
+    async def get_history(
+        agent_name: str, limit: int = 20, x_session_id: str | None = Header(None),
+    ):
         session = await session_manager.get_or_create(x_session_id)
         events = session.bus.get_history(agent_name=agent_name, limit=limit)
         return [
@@ -249,7 +261,10 @@ def create_app() -> FastAPI:
             "timeout": cfg.llm.timeout,
             "api_keys": list(cfg.llm.api_keys.keys()),
             "agents": {
-                name: {"model": getattr(cfg.agents, name).model or cfg.llm.default_model, "specialty": getattr(cfg.agents, name).specialty}
+                name: {
+                    "model": getattr(cfg.agents, name).model or cfg.llm.default_model,
+                    "specialty": getattr(cfg.agents, name).specialty,
+                }
                 for name in ("fog", "rain", "frost", "snow", "dew")
             },
         }
@@ -261,7 +276,6 @@ def create_app() -> FastAPI:
         session_id = uuid.uuid4().hex[:12]
         session = await session_manager.get_or_create(session_id)
 
-        # Subscribe to state changes
         async def on_state_change(event: Event) -> None:
             try:
                 await ws.send_json({
@@ -291,10 +305,12 @@ def create_app() -> FastAPI:
                     agent_name = msg.get("agent", "fog")
                     agent = session.agents.get(agent_name)
                     if not agent:
-                        await ws.send_json({"type": "error", "message": f"Unknown agent: {agent_name}"})
+                        await ws.send_json({
+                            "type": "error",
+                            "message": f"Unknown agent: {agent_name}",
+                        })
                         continue
 
-                    # Stream response
                     full = ""
                     async for chunk in agent.chat_stream(msg.get("message", "")):
                         full += chunk
@@ -321,7 +337,11 @@ def create_app() -> FastAPI:
                             "type": "task_plan",
                             "goal": goal,
                             "tasks": [
-                                {"id": t.id, "description": t.description, "agent": t.assigned_to}
+                                {
+                                    "id": t.id,
+                                    "description": t.description,
+                                    "agent": t.assigned_to,
+                                }
                                 for t in tasks
                             ],
                         })

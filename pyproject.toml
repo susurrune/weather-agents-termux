@@ -1,9 +1,19 @@
 [project]
 name = "weather-agents"
-version = "0.3.0"
-description = "Weather-themed multi-agent system: Fog, Rain, Frost, Snow, Dew"
+version = "1.0.0"
+description = "Weather-themed multi-agent system: Fog, Rain, Frost, Snow, Dew — a universal AI tool orchestration framework"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+keywords = ["multi-agent", "llm", "orchestration", "ai", "tool-use"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "litellm>=1.60",
     "typer>=0.15",
@@ -39,5 +49,19 @@ packages = ["src/weather_agents"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["weather_agents"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]

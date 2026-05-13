@@ -30,7 +30,7 @@ class Task:
     description: str
     assigned_to: str | None = None
     parent_id: str | None = None
-    status: str = "pending"  # pending, in_progress, completed, failed
+    status: str = "pending"
     result: str | None = None
     metadata: dict = field(default_factory=dict)
 
@@ -51,7 +51,7 @@ class BaseAgent(ABC):
     specialty: str = ""
     system_prompt: str = ""
     tool_names: list[str] = []
-    skill_names: list[str] = []  # pre-installed skill names
+    skill_names: list[str] = []
 
     def __init__(
         self,
@@ -78,13 +78,18 @@ class BaseAgent(ABC):
         await self.memory.init_db()
         self._base_system_prompt = self.system_prompt
         self.memory.add_message("system", self.system_prompt)
-        self._tools = self.tool_registry.get_tools(self.tool_names) or self.tool_registry.get_tools()
+        self._tools = (
+            self.tool_registry.get_tools(self.tool_names)
+            or self.tool_registry.get_tools()
+        )
         self._load_skills()
         self.bus.subscribe(self.name, self._handle_event)
 
     def _load_skills(self) -> None:
         """Load pre-installed skills and merge their tool requirements."""
-        self._skills = self.skill_registry.get_skills(self.skill_names) if self.skill_names else []
+        self._skills = (
+            self.skill_registry.get_skills(self.skill_names) if self.skill_names else []
+        )
         for skill in self._skills:
             for tool_name in skill.required_tools:
                 tool = self.tool_registry.get(tool_name)
@@ -117,15 +122,15 @@ class BaseAgent(ABC):
         if not self._active_skills:
             prompt = self._base_system_prompt
         else:
-            skill_prompts = []
-            for skill in self._skills:
-                if skill.name in self._active_skills and skill.system_prompt:
-                    skill_prompts.append(skill.system_prompt)
+            skill_prompts = [
+                skill.system_prompt
+                for skill in self._skills
+                if skill.name in self._active_skills and skill.system_prompt
+            ]
             prompt = self._base_system_prompt
             if skill_prompts:
                 prompt += "\n\n" + "\n\n".join(skill_prompts)
 
-        # Update the system message in short-term memory
         for i, msg in enumerate(self.memory.short_term):
             if msg.role == "system":
                 msg.content = prompt
@@ -134,11 +139,9 @@ class BaseAgent(ABC):
             self.memory.add_message("system", prompt)
 
     def get_active_skills(self) -> list[str]:
-        """Return names of currently active skills."""
         return list(self._active_skills)
 
     def get_available_skills(self) -> list[dict]:
-        """Return metadata for all pre-installed skills."""
         return [
             {
                 "name": s.name,
@@ -172,7 +175,11 @@ class BaseAgent(ABC):
                 type=EventType.TASK_COMPLETED,
                 source=self.name,
                 target=event.source,
-                data={"task_id": task.id, "success": result.success, "content": result.content},
+                data={
+                    "task_id": task.id,
+                    "success": result.success,
+                    "content": result.content,
+                },
             ))
 
     async def chat(self, message: str) -> str:
@@ -187,7 +194,9 @@ class BaseAgent(ABC):
             return response.content
         except Exception as e:
             await self._set_state(AgentState.ERROR)
-            return f"[{self.display_name}] 出错了: {e}"
+            error_msg = f"[{self.display_name}] 出错了: {e}"
+            self.memory.add_message("assistant", error_msg)
+            return error_msg
 
     async def chat_stream(self, message: str) -> AsyncIterator[str]:
         """Streaming chat mode. Yields content chunks as they arrive."""
@@ -206,7 +215,7 @@ class BaseAgent(ABC):
             await self._set_state(AgentState.IDLE)
         except Exception as e:
             await self._set_state(AgentState.ERROR)
-            yield f"[Error: {e}]"
+            yield f"\n[Error: {e}]"
 
     async def execute_task(self, task: Task) -> TaskResult:
         """Execute a specific task using agent specialty."""
@@ -216,7 +225,9 @@ class BaseAgent(ABC):
 
         prompt = f"请完成以下任务: {task.description}"
         if task.metadata:
-            prompt += f"\n附加信息: {json.dumps(task.metadata, ensure_ascii=False)}"
+            ctx_data = {k: v for k, v in task.metadata.items() if k != "goal"}
+            if ctx_data:
+                prompt += f"\n附加信息: {json.dumps(ctx_data, ensure_ascii=False)}"
 
         self.memory.add_message("user", prompt)
 
@@ -235,6 +246,8 @@ class BaseAgent(ABC):
 
     async def _llm_loop(self, max_iterations: int = 10) -> LLMResponse:
         """LLM reasoning loop with tool calling support."""
+        response = LLMResponse(content="")
+
         for _ in range(max_iterations):
             messages = self.memory.get_messages()
             response = await self.llm.complete(
@@ -246,21 +259,21 @@ class BaseAgent(ABC):
             if not response.tool_calls:
                 return response
 
-            # Record LLM call trace
             self.bus.add_event(Event(
                 type=EventType.LLM_CALL,
                 source=self.name,
                 data={"model": response.model, "usage": response.usage},
             ))
 
-            # Process tool calls
-            self.memory.add_message("assistant", response.content or "",
-                                     **{"tool_calls": response.tool_calls})
+            # Record assistant message with tool_calls
+            self.memory.add_message(
+                "assistant", response.content or "",
+                tool_calls=response.tool_calls,
+            )
 
             for tc in response.tool_calls:
                 tool = self.tool_registry.get(tc["name"])
 
-                # Record tool call trace
                 self.bus.add_event(Event(
                     type=EventType.TOOL_CALL,
                     source=self.name,
@@ -270,9 +283,17 @@ class BaseAgent(ABC):
                 if tool:
                     await self._set_state(AgentState.ACTING)
                     result = await tool.execute(**tc["arguments"])
-                    self.memory.add_message("tool", result,
-                                             name=tc["name"],
-                                             tool_call_id=tc["id"])
+                    self.memory.add_message(
+                        "tool", result,
+                        name=tc["name"],
+                        tool_call_id=tc["id"],
+                    )
+                else:
+                    self.memory.add_message(
+                        "tool", f"Tool '{tc['name']}' not found",
+                        name=tc["name"],
+                        tool_call_id=tc["id"],
+                    )
 
             await self._set_state(AgentState.THINKING)
 

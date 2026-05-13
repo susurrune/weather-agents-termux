@@ -1,6 +1,6 @@
-# 模型配置 - 各 Agent 可用不同模型
+# Weather Agents — Model Catalog
+# Each agent can use a different model. Configure via `wa config set model.<agent> <model>`
 
-# OpenAI
 openai:
   gpt-4o:
     provider: "openai"
@@ -18,8 +18,11 @@ openai:
     provider: "openai"
     context_window: 1047576
     max_output: 32768
+  gpt-4.1-nano:
+    provider: "openai"
+    context_window: 1047576
+    max_output: 32768
 
-# Anthropic
 anthropic:
   claude-sonnet-4-6:
     provider: "anthropic"
@@ -34,7 +37,16 @@ anthropic:
     context_window: 200000
     max_output: 8192
 
-# 本地模型
+deepseek:
+  deepseek-chat:
+    provider: "deepseek"
+    context_window: 128000
+    max_output: 8192
+  deepseek-reasoner:
+    provider: "deepseek"
+    context_window: 128000
+    max_output: 8192
+
 local:
   ollama/llama3:
     provider: "ollama"
@@ -43,4 +55,8 @@ local:
   ollama/qwen2.5:
     provider: "ollama"
     context_window: 32768
+    max_output: 8192
+  ollama/deepseek-r1:
+    provider: "ollama"
+    context_window: 128000
     max_output: 8192

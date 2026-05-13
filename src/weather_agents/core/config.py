@@ -122,7 +122,7 @@ class AppConfig:
 
 def _load_yaml(path: Path) -> dict:
     if path.exists():
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
 
@@ -133,7 +133,7 @@ def _save_user_cfg(data: dict) -> None:
     existing = _load_yaml(path)
     _deep_merge(existing, data)
     USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.dump(existing, f, allow_unicode=True, default_flow_style=False)
     invalidate_cache()
 
@@ -150,7 +150,7 @@ def _deep_merge(base: dict, override: dict) -> None:
 def _write_yaml(path: Path, data: dict) -> None:
     """Write dict to YAML file directly (not merge). Set restrictive permissions."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
     # Restrict permissions to owner-only for sensitive data (API keys)
     try:

@@ -5,6 +5,7 @@ Avoids duplication between CLI and web entry points.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,9 +99,10 @@ async def orchestrate_task(
     agent_map: dict[str, BaseAgent],
     snow: BaseAgent | None = None,
 ) -> tuple[list[Any], list[TaskExecutionResult], str]:
-    """Orchestrate a multi-agent task: plan → execute → summarize.
+    """Orchestrate a multi-agent task: plan -> execute -> summarize.
 
-    Returns (tasks, results, summary).
+    Respects dependency ordering: tasks with depends_on wait for their
+    parent to complete before starting.
     """
     if snow is None:
         snow = agent_map.get("snow")
@@ -109,38 +111,53 @@ async def orchestrate_task(
 
     tasks = await snow.orchestrate(goal)
 
+    # Build dependency graph and execute in topological order
+    completed: set[str] = set()
     results: list[TaskExecutionResult] = []
-    for task in tasks:
-        assigned = task.assigned_to
-        if not assigned or assigned == "snow":
-            continue
-        agent = agent_map.get(assigned)
-        if not agent:
-            continue
-        a_task = AgentTask(
-            id=task.id,
-            description=task.description,
-            assigned_to=assigned,
-            metadata=task.metadata,
-        )
-        result = await agent.execute_task(a_task)
-        results.append(
-            TaskExecutionResult(
-                id=task.id,
-                agent=assigned,
-                description=task.description,
-                success=result.success,
+    pending = [t for t in tasks if t.assigned_to and t.assigned_to != "snow"]
+
+    while pending:
+        # Find tasks whose dependencies are satisfied
+        ready = [
+            t for t in pending
+            if not t.parent_id or t.parent_id in completed
+        ]
+        if not ready:
+            ready = pending[:1]  # break deadlock
+
+        # Execute ready tasks concurrently
+        async def _execute_one(t):
+            agent = agent_map.get(t.assigned_to)
+            if not agent:
+                return TaskExecutionResult(
+                    id=t.id, agent=t.assigned_to or "",
+                    description=t.description, success=False,
+                    content=f"Agent '{t.assigned_to}' not found",
+                )
+            a_task = AgentTask(
+                id=t.id, description=t.description,
+                assigned_to=t.assigned_to, metadata=t.metadata,
+            )
+            result = await agent.execute_task(a_task)
+            return TaskExecutionResult(
+                id=t.id, agent=t.assigned_to or "",
+                description=t.description, success=result.success,
                 content=result.content[:500],
             )
-        )
+
+        batch_results = await asyncio.gather(*[_execute_one(t) for t in ready])
+        for r in batch_results:
+            results.append(r)
+            completed.add(r.id)
+        for t in ready:
+            pending.remove(t)
 
     # Generate summary
     if results:
         summary_prompt = "请汇总以下所有子任务的执行结果：\n\n"
         for r in results:
             status = "成功" if r.success else "失败"
-            summary_prompt += f"## 任务 {r['id'] if isinstance(r, dict) else r.id} ({r.agent}) - {status}\n"
-            summary_prompt += f"{r.content[:300]}\n\n"
+            summary_prompt += f"## 任务 {r.id} ({r.agent}) - {status}\n{r.content[:300]}\n\n"
         summary = await snow.chat(summary_prompt)
     else:
         summary = "没有需要执行的任务。"
