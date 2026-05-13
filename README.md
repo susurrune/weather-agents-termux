@@ -1,125 +1,229 @@
-# Weather Agents 🌤️ — 多智能体协作系统
+<div align="center">
 
-雾·雨·霜·雪·露 —— 五种 Agent 各司其职，通过技能系统和事件总线协作完成复杂任务。
+# Weather Agents
 
-## 架构概览
+**雾 · 雨 · 霜 · 雪 · 露**
+
+*五位气象 Agent 各司其职，通过技能系统与事件总线协作，完成任何复杂任务。*
+
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/susurrune/weather-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/susurrune/weather-agents/actions)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/susurrune/weather-agents)
+
+</div>
+
+---
+
+## Why Weather Agents?
+
+大多数 AI 工具都是单一模型 + 单一提示词。Weather Agents 不同——它将任务分解给**专精不同领域的 Agent**，像一支配合默契的团队：规划者拆解目标，研究者搜集信息，工程师编写代码，审计师把关质量，运维者落地执行。
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      CLI (typer + rich)                  │
-│                   Web Dashboard (FastAPI)                │
-├──────────┬──────────┬──────────┬──────────┬─────────────┤
-│  🌫️ Fog  │  🌧️ Rain │  ❄️ Frost │  🌨️ Snow  │   💧 Dew    │
-│ 探索研究  │ 生成创造  │ 审查优化  │ 规划编排  │  运维集成    │
-├──────────┴──────────┴──────────┴──────────┴─────────────┤
-│                   Skills System (15 skills)              │
-├─────────────────────────────────────────────────────────┤
-│        Tool Registry + 9 Built-in Tools + MCP            │
-├─────────────────────────────────────────────────────────┤
-│           Message Bus (events + orchestration)            │
-├─────────────────────────────────────────────────────────┤
-│      LLM Layer (LiteLLM) │ Memory (SQLite + working)     │
-│      Config (YAML + env) │ Plugins │ Cache               │
-└─────────────────────────────────────────────────────────┘
+用户: "帮我搭建一个 FastAPI 项目"
+
+  🌨️ Snow  → 拆解为 5 个子任务，分配给合适的 Agent
+  🌫️ Fog   → 调研最佳实践和项目结构
+  🌧️ Rain  → 生成项目代码和配置文件
+  ❄️ Frost → 审查代码质量和安全性
+  💧 Dew   → 初始化 Git、安装依赖、验证运行
+```
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                  CLI (Typer + Rich)                          │
+│                  Web Dashboard (FastAPI + WebSocket)         │
+├───────────┬───────────┬───────────┬───────────┬──────────────┤
+│  🌫️ Fog   │  🌧️ Rain  │  ❄️ Frost  │  🌨️ Snow  │   💧 Dew     │
+│  探索研究  │  生成创造  │  审查优化  │  规划编排  │   运维集成   │
+├───────────┴───────────┴───────────┴───────────┴──────────────┤
+│                    Skill System (15 composable skills)       │
+├──────────────────────────────────────────────────────────────┤
+│          Tool Registry · 9 Built-in Tools · MCP Protocol     │
+├──────────────────────────────────────────────────────────────┤
+│              Event Bus (pub/sub · orchestration)              │
+├────────────────────────────┬─────────────────────────────────┤
+│  LLM (LiteLLM multi-provider) │  Memory (SQLite · 3-layer)  │
+│  Config (YAML + ENV)          │  Plugins · Cache · Budget    │
+└────────────────────────────┴─────────────────────────────────┘
 ```
 
 ## Agents
 
-| Agent | Name | Emoji | 专长 | 技能 |
-|-------|------|-------|------|------|
-| Fog | 雾 | 🌫️ | 探索研究 | 网络调研, 代码分析, 文档分析 |
-| Rain | 雨 | 🌧️ | 生成创造 | 代码生成, 内容写作, 数据转换 |
-| Frost | 霜 | ❄️ | 审查优化 | 代码审查, 安全审计, 性能检查 |
-| Snow | 雪 | 🌨️ | 规划编排 | 任务规划, 架构设计, 工作流设计 |
-| Dew | 露 | 💧 | 运维集成 | 系统操作, CI/CD, API集成 |
+| Agent | 中文 | 职能 | 专属技能 |
+|:------|:-----|:-----|:---------|
+| 🌫️ **Fog** | 雾 | 探索研究 | `web_research` · `code_analysis` · `doc_analysis` |
+| 🌧️ **Rain** | 雨 | 生成创造 | `code_generator` · `content_writer` · `data_transformer` |
+| ❄️ **Frost** | 霜 | 审查优化 | `code_reviewer` · `security_audit` · `performance_check` |
+| 🌨️ **Snow** | 雪 | 规划编排 | `task_planner` · `arch_designer` · `workflow_designer` |
+| 💧 **Dew** | 露 | 运维集成 | `sys_operator` · `ci_cd` · `api_integrator` |
 
-## 快速开始
+## Quick Start
+
+### 1. Install
 
 ```bash
-# 安装
+git clone https://github.com/susurrune/weather-agents.git
+cd weather-agents
 pip install -e .
-
-# 配置 API 密钥
-wa config set api_key.openai sk-xxx
-
-# 启动交互式 CLI
-wa chat
-
-# 单轮对话
-wa chat fog "Python 异步编程的最佳实践"
-
-# 多 Agent 任务编排
-wa task "搭建一个 FastAPI 项目结构"
 ```
 
-## CLI 命令
+### 2. Configure
 
-| 命令 | 说明 |
-|------|------|
-| `wa chat [agent]` | 交互式对话（默认 fog） |
-| `wa task <goal>` | 多 Agent 任务编排 |
+```bash
+# 方式一：环境变量（推荐）
+cp .env.example .env
+# 编辑 .env 填入 API Key
+
+# 方式二：CLI 配置
+wa config set api_key.openai sk-xxx
+wa config set api_key.anthropic sk-ant-xxx
+wa config set api_key.deepseek sk-xxx
+```
+
+### 3. Use
+
+```bash
+# 交互式对话（默认 Fog Agent）
+wa chat
+
+# 指定 Agent 单轮对话
+wa chat rain "用 Python 写一个 LRU Cache"
+
+# 多 Agent 协作编排
+wa task "设计并实现一个 URL 短链接服务"
+
+# 启动 Web 仪表盘
+wa web
+```
+
+## CLI Reference
+
+### Top-level Commands
+
+| Command | Description |
+|:--------|:------------|
+| `wa chat [agent] [message]` | 对话（默认 `fog`，支持 `fog` `rain` `frost` `snow` `dew`）|
+| `wa task <goal>` | Snow Agent 拆解目标并调度多 Agent 协作 |
 | `wa status` | 查看所有 Agent 状态 |
-| `wa config list` | 查看配置 |
-| `wa config set <key> <value>` | 设置配置 |
-| `wa web` | 启动 Web 仪表盘 |
-| `wa memory status` | 查看记忆状态 |
+| `wa web` | 启动 Web Dashboard (`http://127.0.0.1:8765`) |
+| `wa config list\|set\|delete` | 查看/修改/删除配置 |
+| `wa memory status\|clear` | 查看/清除记忆 |
 
-### 交互模式内命令
+### Interactive Commands
 
-| 命令 | 说明 |
-|------|------|
-| `/fog /rain /frost /snow /dew` | 切换 Agent |
+进入 `wa chat` 后可使用：
+
+| Command | Description |
+|:--------|:------------|
+| `/fog` `/rain` `/frost` `/snow` `/dew` | 切换 Agent |
 | `/task <目标>` | 多 Agent 任务编排 |
-| `/skills` | 查看当前 Agent 技能 |
-| `/use <技能名>` | 激活技能 |
+| `/skills` | 查看当前 Agent 可用技能 |
+| `/use <skill>` | 激活技能（增强提示词 + 扩展工具） |
 | `/deactivate` | 关闭所有技能 |
-| `/status` | 查看所有 Agent 状态 |
+| `/status` | Agent 状态一览 |
+| `/cost` | 查看 Token 用量和费用 |
+| `/history` | 查看事件日志 |
+| `/mcp` | MCP 服务器状态 |
+| `/version` | 版本信息 |
 | `/clear` | 清屏 |
 | `/quit` | 退出 |
 
-## Web 仪表盘
+## Features
+
+### Multi-Provider LLM
+
+通过 [LiteLLM](https://github.com/BerriAI/litellm) 接入多家模型，每个 Agent 可独立配置：
+
+| Provider | Models |
+|:---------|:-------|
+| OpenAI | `gpt-4o` · `gpt-4o-mini` · `gpt-4.1-nano` |
+| Anthropic | `claude-sonnet-4-20250514` · `claude-haiku-4-20250414` |
+| DeepSeek | `deepseek-chat` · `deepseek-reasoner` |
+| Ollama | `ollama/llama3` · `ollama/deepseek-r1` (本地) |
+
+### Skill System
+
+15 个可组合技能，运行时动态激活/关闭，为 Agent 注入专业能力：
 
 ```bash
-wa web
-# 打开 http://127.0.0.1:8765
+wa chat frost
+> /skills              # 查看 Frost 的 3 个技能
+> /use security_audit   # 激活安全审计模式
+> 审查这段代码的安全性    # Frost 现在拥有安全审计的增强提示词和专属工具
+> /deactivate           # 回到基础模式
 ```
 
-支持 WebSocket 实时流式对话、任务编排和技能管理。
+### Three-Layer Memory
 
-## 配置
+| Layer | Scope | Storage | Purpose |
+|:------|:------|:--------|:--------|
+| **Short-term** | 会话级 | SQLite | 对话上下文，自动截断 |
+| **Working** | 任务级 | In-memory | 任务执行中的临时状态 |
+| **Long-term** | 持久 | SQLite KV | 带分类的知识记忆，支持模糊搜索 |
 
-配置文件位于 `~/.weather-agents/config.yaml`，支持：
+### Task Orchestration
+
+Snow Agent 将复杂目标分解为带依赖关系的子任务，并行调度执行：
+
+```
+Goal: "搭建微服务项目"
+  ├─ [1] Fog: 调研微服务最佳实践
+  ├─ [2] Rain: 生成项目骨架 (depends: 1)
+  ├─ [3] Rain: 编写 Dockerfile (depends: 2)
+  ├─ [4] Frost: 代码审查 (depends: 2)
+  └─ [5] Dew: 部署验证 (depends: 3, 4)
+```
+
+- 自动依赖排序，无依赖的任务并行执行
+- 失败任务自动重试（最多 3 轮）
+- 结果汇总报告
+
+### Cost Control
+
+内置费用追踪和预算控制：
+
+```bash
+> /cost   # 查看各 Agent 累计 Token 和费用
+```
+
+```python
+# 代码中设置预算上限
+llm = LLMClient(config, cost_limit=5.0)  # 超过 $5 自动停止
+```
+
+### Web Dashboard
+
+```bash
+wa web  # http://127.0.0.1:8765
+```
+
+- WebSocket 实时流式响应
+- 多 Agent 对话 & 技能切换
+- 任务编排可视化
+- Session 隔离，支持多用户
+- 可选 Bearer Token 认证 (`WA_API_TOKEN`)
+
+### MCP Integration
+
+支持 [Model Context Protocol](https://modelcontextprotocol.io) 扩展工具集：
 
 ```yaml
-llm:
-  default_model: "gpt-4o-mini"
-  temperature: 0.7
-  api_keys:
-    openai: "${OPENAI_API_KEY}"  # 从环境变量读取
-
-agents:
-  fog:
-    model: "gpt-4o"  # 覆盖默认模型
+# ~/.weather-agents/config.yaml
+mcp:
+  servers:
+    - name: "filesystem"
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/home"]
+      transport: "stdio"
+      enabled: true
 ```
 
-## 技能系统
+### Plugin System
 
-每个 Agent 预装 3 个专属技能，可在对话中动态激活：
-
-```bash
-# 查看可用技能
-/skills
-
-# 激活技能（增强系统提示词 + 扩展工具集）
-/use code_analysis
-
-# 关闭所有技能，恢复基础提示词
-/deactivate
-```
-
-## 插件开发
-
-插件是 `.py` 文件，放置在 `~/.weather-agents/plugins/` 目录：
+将自定义工具放入 `~/.weather-agents/plugins/` 即可自动加载：
 
 ```python
 from weather_agents.plugins.loader import Plugin
@@ -131,46 +235,73 @@ def create_plugin() -> Plugin:
         name="my_tool",
         description="My custom tool",
         parameters=[ToolParameter(name="input", type="string", description="Input")],
-        handler=lambda input: f"hello {input}",
+        handler=lambda input: f"processed: {input}",
     ))
     return plugin
 ```
 
-## MCP 集成
+## Configuration
 
-支持 MCP (Model Context Protocol) 服务器，配置在 `~/.weather-agents/config.yaml`：
+配置按优先级从高到低合并：
+
+1. **环境变量** — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `WA_API_TOKEN`
+2. **用户配置** — `~/.weather-agents/config.yaml`
+3. **项目配置** — `./config/default.yaml`
 
 ```yaml
-mcp:
-  servers:
-    - name: "filesystem"
-      command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/root"]
-      enabled: true
+llm:
+  default_model: "gpt-4o-mini"
+  temperature: 0.7
+  max_tokens: 4096
+  timeout: 60
+  api_keys:
+    openai: "${OPENAI_API_KEY}"
+    anthropic: "${ANTHROPIC_API_KEY}"
+    deepseek: "${DEEPSEEK_API_KEY}"
+
+agents:
+  fog:
+    model: "gpt-4o"       # 覆盖默认模型
+  frost:
+    model: "claude-sonnet-4-20250514"
+
+memory:
+  db_path: "~/.weather-agents/memory.db"
+  short_term_limit: 50
 ```
 
-## 开发
+## Development
 
 ```bash
-git clone https://github.com/susurrune/weather-agents.git
-cd weather-agents
+# 安装开发依赖
 pip install -e ".[dev]"
 
-# 运行测试
+# 测试（94 tests）
 pytest tests/ -v
 
-# 代码检查
+# Lint
 ruff check src/ tests/
 
-# 类型检查
+# Type check
 mypy src/
+
+# Format
+ruff format src/ tests/
 ```
 
-## 技术栈
+## Tech Stack
 
-- **Python 3.11+** — async/await
-- **LiteLLM** — 多模型 LLM 接入
-- **FastAPI + WebSocket** — Web 服务
-- **SQLite (aiosqlite)** — 持久化记忆
-- **Typer + Rich** — CLI
-- **MCP** — Model Context Protocol 工具扩展
+| Component | Technology |
+|:----------|:-----------|
+| Runtime | Python 3.12+ · asyncio |
+| LLM | LiteLLM (OpenAI / Anthropic / DeepSeek / Ollama) |
+| Web | FastAPI · WebSocket · Uvicorn |
+| CLI | Typer · Rich |
+| Memory | aiosqlite · 3-layer architecture |
+| Search | DuckDuckGo (built-in, no API key) |
+| Tools | MCP Protocol · Plugin system |
+| CI | GitHub Actions · Ruff · MyPy · Pytest |
+
+## License
+
+[MIT](LICENSE)
