@@ -141,7 +141,7 @@ wa web
 |:---------|:-------|
 | OpenAI | `gpt-4o` · `gpt-4o-mini` · `gpt-4.1-nano` |
 | Anthropic | `claude-sonnet-4-20250514` · `claude-haiku-4-20250414` |
-| DeepSeek | `deepseek-chat` · `deepseek-reasoner` |
+| DeepSeek | `deepseek-v4-flash` · `deepseek-v4-pro` |
 | Ollama | `ollama/llama3` · `ollama/deepseek-r1` (本地) |
 
 ### Skill System
