@@ -29,6 +29,3 @@ class RainAgent(BaseAgent):
 - 代码输出完整可运行，附带简短说明
 - 创作内容直接给出结果，少说废话
 - 主动提供多种方案供选择"""
-
-    def get_specialty_prompt(self) -> str:
-        return "作为雨，你擅长生成代码、创造内容、转换数据。对于生成类任务，请产出高质量、完整可用的结果。"

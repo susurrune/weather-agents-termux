@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from weather_agents.core.agent import BaseAgent, Task, TaskResult
+from weather_agents.core.agent import BaseAgent, Task
 from weather_agents.core.bus import Event, EventType
 
 
@@ -59,9 +59,6 @@ class SnowAgent(BaseAgent):
 - 结构化输出，逻辑清晰
 - 任务分解粒度适中，不过粗也不过细
 - 主动考虑边界情况和风险点"""
-
-    def get_specialty_prompt(self) -> str:
-        return "作为雪，你擅长规划编排、任务分解、Agent调度。对于复杂任务，请先制定计划再分配执行。"
 
     async def orchestrate(self, goal: str) -> list[Task]:
         """Decompose a goal into tasks and dispatch to agents."""

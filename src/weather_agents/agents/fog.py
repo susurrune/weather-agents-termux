@@ -28,6 +28,3 @@ class FogAgent(BaseAgent):
 - 逻辑清晰，层次分明
 - 善用列表和分类组织信息
 - 主动指出潜在的风险和注意事项"""
-
-    def get_specialty_prompt(self) -> str:
-        return "作为雾，你擅长探索未知、分析信息、揭示隐藏的真相。对于研究类问题，请深入挖掘，多角度分析。"

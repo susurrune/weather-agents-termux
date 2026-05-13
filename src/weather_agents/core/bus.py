@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Coroutine
 from collections import defaultdict
@@ -28,7 +27,7 @@ class Event:
     source: str  # agent name or "system"
     target: str | None = None  # None = broadcast
     data: dict = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 Handler = Callable[[Event], Coroutine[Any, Any, None]]

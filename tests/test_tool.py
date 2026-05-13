@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from weather_agents.core.tool import Tool, ToolParameter, ToolRegistry
 

@@ -4,35 +4,38 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
-from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 
 from weather_agents.core.config import load_config
-from weather_agents.core.bus import MessageBus, Event, EventType
-from weather_agents.core.llm import LLMClient
+from weather_agents.core.bus import Event
 from weather_agents.core.tool import global_registry
 from weather_agents.core.mcp import MCPManager
+from weather_agents.core.factory import create_system_context
 from weather_agents.tools.builtin import register_builtin_tools
-from weather_agents.agents.fog import FogAgent
-from weather_agents.agents.rain import RainAgent
-from weather_agents.agents.frost import FrostAgent
-from weather_agents.agents.snow import SnowAgent
-from weather_agents.agents.dew import DewAgent
-from weather_agents.core.agent import BaseAgent
+
+# Optional API token for production auth (set env WA_API_TOKEN)
+_API_TOKEN: str | None = None
 
 
-AGENT_MAP = {
-    "fog": FogAgent,
-    "rain": RainAgent,
-    "frost": FrostAgent,
-    "snow": SnowAgent,
-    "dew": DewAgent,
-}
+def _check_api_token(authorization: str | None = None) -> str | None:
+    """Validate Bearer token if API auth is configured."""
+    global _API_TOKEN
+    if _API_TOKEN is None:
+        _API_TOKEN = __import__("os").environ.get("WA_API_TOKEN", "")
+    if not _API_TOKEN:
+        return None  # no auth configured
+    if not authorization:
+        return "Missing Authorization header"
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or token != _API_TOKEN:
+        return "Invalid API token"
+    return None
 
 
 class Session:
@@ -40,46 +43,89 @@ class Session:
 
     def __init__(self, session_id: str) -> None:
         self.id = session_id
-        self.config = load_config()
-        self.bus = MessageBus()
-        self.llm = LLMClient(self.config, global_registry)
-        self.agents: dict[str, BaseAgent] = {}
-        self._task = None
+        self._ctx = create_system_context()
+        self.agents = self._ctx.agent_map
+        self.bus = self._ctx.bus
+        self.last_used: float = time.monotonic()
 
     async def init(self) -> None:
-        for name, cls in AGENT_MAP.items():
-            agent = cls(config=self.config, llm=self.llm, bus=self.bus, tool_registry=global_registry)
-            self.agents[name] = agent
-            await agent.init()
+        await self._ctx.init_all()
 
     async def close(self) -> None:
-        for agent in self.agents.values():
-            await agent.close()
+        await self._ctx.close_all()
+
+    def touch(self) -> None:
+        self.last_used = time.monotonic()
 
 
 class SessionManager:
-    """Manages multiple user sessions."""
+    """Manages multiple user sessions with TTL and concurrency safety."""
 
-    def __init__(self) -> None:
+    def __init__(self, session_ttl: int = 1800) -> None:
         self._sessions: dict[str, Session] = {}
+        self._lock = asyncio.Lock()
+        self._session_ttl = session_ttl
+        self._cleanup_task: asyncio.Task | None = None
+
+    def start_cleanup(self, interval: int = 300) -> None:
+        """Start background task that evicts expired sessions."""
+        if self._cleanup_task is not None:
+            return
+
+        async def _evict_loop():
+            while True:
+                await asyncio.sleep(interval)
+                await self._evict_expired()
+
+        self._cleanup_task = asyncio.create_task(_evict_loop())
+
+    async def stop_cleanup(self) -> None:
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+
+    async def _evict_expired(self) -> None:
+        now = time.monotonic()
+        async with self._lock:
+            stale = [sid for sid, s in self._sessions.items() if now - s.last_used > self._session_ttl]
+            for sid in stale:
+                session = self._sessions.pop(sid)
+                asyncio.ensure_future(session.close())
 
     async def get_or_create(self, session_id: str | None = None) -> Session:
         sid = session_id or uuid.uuid4().hex[:12]
-        if sid not in self._sessions:
-            session = Session(sid)
-            await session.init()
-            self._sessions[sid] = session
-        return self._sessions[sid]
+        async with self._lock:
+            session = self._sessions.get(sid)
+            if session is None:
+                session = Session(sid)
+                await session.init()
+                self._sessions[sid] = session
+            else:
+                session.touch()
+            return session
 
     async def remove(self, session_id: str) -> None:
-        session = self._sessions.pop(session_id, None)
+        async with self._lock:
+            session = self._sessions.pop(session_id, None)
         if session:
             await session.close()
 
     async def cleanup_stale(self) -> None:
         """Remove all sessions (called on shutdown)."""
-        for sid in list(self._sessions.keys()):
-            await self.remove(sid)
+        await self.stop_cleanup()
+        async with self._lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            await session.close()
+
+    async def get_session_count(self) -> int:
+        async with self._lock:
+            return len(self._sessions)
 
 
 # Global instances
@@ -92,6 +138,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup():
         register_builtin_tools()
+        session_manager.start_cleanup()
         # Initialize MCP servers globally
         config = load_config()
         mcp_configs = getattr(config, "mcp", None)
@@ -109,23 +156,31 @@ def create_app() -> FastAPI:
     async def shutdown():
         await session_manager.cleanup_stale()
 
+    # ── Auth dependency ─────────────────────────────────────────────────────
+    from fastapi import Depends
+
+    async def verify_token(authorization: str | None = Header(None)):
+        err = _check_api_token(authorization)
+        if err:
+            raise HTTPException(status_code=401, detail=err)
+
     # API routes
-    @app.get("/api/agents")
-    async def list_agents(session_id: str = ""):
-        session = await session_manager.get_or_create(session_id or None)
+    @app.get("/api/agents", dependencies=[Depends(verify_token)])
+    async def list_agents(x_session_id: str | None = Header(None)):
+        session = await session_manager.get_or_create(x_session_id)
         return [agent.get_status() for agent in session.agents.values()]
 
-    @app.get("/api/agents/{agent_name}")
-    async def get_agent(agent_name: str, session_id: str = ""):
-        session = await session_manager.get_or_create(session_id or None)
+    @app.get("/api/agents/{agent_name}", dependencies=[Depends(verify_token)])
+    async def get_agent(agent_name: str, x_session_id: str | None = Header(None)):
+        session = await session_manager.get_or_create(x_session_id)
         agent = session.agents.get(agent_name)
         if not agent:
             return {"error": "Agent not found"}
         return agent.get_status()
 
-    @app.post("/api/agents/{agent_name}/chat")
-    async def chat_with_agent(agent_name: str, body: dict, session_id: str = ""):
-        session = await session_manager.get_or_create(session_id or None)
+    @app.post("/api/agents/{agent_name}/chat", dependencies=[Depends(verify_token)])
+    async def chat_with_agent(agent_name: str, body: dict, x_session_id: str | None = Header(None)):
+        session = await session_manager.get_or_create(x_session_id)
         agent = session.agents.get(agent_name)
         if not agent:
             return {"error": "Agent not found"}
@@ -133,53 +188,16 @@ def create_app() -> FastAPI:
         response = await agent.chat(message)
         return {"agent": agent_name, "response": response, "session_id": session.id}
 
-    @app.post("/api/task")
-    async def orchestrate_task(body: dict, session_id: str = ""):
-        session = await session_manager.get_or_create(session_id or None)
-        goal = body.get("goal", "")
-        snow = session.agents.get("snow")
-        if not snow:
-            return {"error": "Snow agent not available"}
-        tasks = await snow.orchestrate(goal)
-
-        # Execute all assigned tasks
-        results = []
-        for task in tasks:
-            assigned = task.assigned_to
-            if not assigned or assigned == "snow":
-                continue
-            agent = session.agents.get(assigned)
-            if not agent:
-                continue
-            from weather_agents.core.agent import Task as AgentTask
-            a_task = AgentTask(
-                id=task.id,
-                description=task.description,
-                assigned_to=assigned,
-                metadata=task.metadata,
-            )
-            result = await agent.execute_task(a_task)
-            task.result = result.content
-            results.append({
-                "id": task.id,
-                "agent": assigned,
-                "success": result.success,
-                "content": result.content[:500],
-            })
-
-        # Generate summary
-        if results:
-            summary_prompt = "请汇总以下所有子任务的执行结果：\n\n"
-            for r in results:
-                status = "成功" if r["success"] else "失败"
-                summary_prompt += f"## 任务 {r['id']} ({r['agent']}) - {status}\n"
-                summary_prompt += f"{r['content'][:300]}\n\n"
-            summary = await snow.chat(summary_prompt)
-        else:
-            summary = "没有需要执行的任务。"
-
+    @app.post("/api/task", dependencies=[Depends(verify_token)])
+    async def orchestrate_task(body: dict, x_session_id: str | None = Header(None)):
+        session = await session_manager.get_or_create(x_session_id)
+        from weather_agents.core.factory import orchestrate_task as run_orch
+        tasks, results, summary = await run_orch(
+            body.get("goal", ""),
+            session.agents,
+        )
         return {
-            "goal": goal,
+            "goal": body.get("goal", ""),
             "tasks": [
                 {
                     "id": t.id,
@@ -189,13 +207,16 @@ def create_app() -> FastAPI:
                 }
                 for t in tasks
             ],
-            "results": results,
+            "results": [
+                {"id": r.id, "agent": r.agent, "success": r.success, "content": r.content}
+                for r in results
+            ],
             "summary": summary,
         }
 
-    @app.get("/api/history/{agent_name}")
-    async def get_history(agent_name: str, limit: int = 20, session_id: str = ""):
-        session = await session_manager.get_or_create(session_id or None)
+    @app.get("/api/history/{agent_name}", dependencies=[Depends(verify_token)])
+    async def get_history(agent_name: str, limit: int = 20, x_session_id: str | None = Header(None)):
+        session = await session_manager.get_or_create(x_session_id)
         events = session.bus.get_history(agent_name=agent_name, limit=limit)
         return [
             {
@@ -208,17 +229,17 @@ def create_app() -> FastAPI:
             for e in events
         ]
 
-    @app.get("/api/session")
+    @app.get("/api/session", dependencies=[Depends(verify_token)])
     async def create_session():
         session = await session_manager.get_or_create()
         return {"session_id": session.id}
 
-    @app.delete("/api/session/{session_id}")
+    @app.delete("/api/session/{session_id}", dependencies=[Depends(verify_token)])
     async def delete_session(session_id: str):
         await session_manager.remove(session_id)
         return {"status": "deleted", "session_id": session_id}
 
-    @app.get("/api/config")
+    @app.get("/api/config", dependencies=[Depends(verify_token)])
     async def get_config():
         cfg = load_config()
         return {

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from weather_agents.core.bus import Event, EventType, MessageBus
 from weather_agents.core.config import AppConfig
@@ -49,7 +49,7 @@ class BaseAgent(ABC):
     emoji: str = ""
     specialty: str = ""
     system_prompt: str = ""
-    tool_names: list[str] = field(default_factory=list)
+    tool_names: list[str] = []
 
     def __init__(
         self,
@@ -221,7 +221,3 @@ class BaseAgent(ABC):
             "state": self.state.value,
         }
 
-    @abstractmethod
-    def get_specialty_prompt(self) -> str:
-        """Return additional system prompt for agent's specialty."""
-        ...

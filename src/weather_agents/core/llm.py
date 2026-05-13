@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import AsyncIterator
@@ -115,7 +116,11 @@ class LLMClient:
             stream=True,
         )
 
-        async for chunk in response:
-            delta = chunk.choices[0].delta
-            if delta.content:
-                yield delta.content
+        try:
+            async with asyncio.timeout(self.config.llm.timeout):
+                async for chunk in response:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        yield delta.content
+        except asyncio.TimeoutError:
+            yield f"\n[Stream timed out after {self.config.llm.timeout}s]"

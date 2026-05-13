@@ -36,6 +36,3 @@ class DewAgent(BaseAgent):
 - 先说明要做什么，再执行
 - 输出命令执行结果，包括成功/失败状态
 - 遇到问题时给出诊断和修复方案"""
-
-    def get_specialty_prompt(self) -> str:
-        return "作为露，你擅长系统操作、部署执行、API集成。对于运维类任务，请确保操作安全可靠。"

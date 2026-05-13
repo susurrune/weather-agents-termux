@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
 
 import pytest
 
-from weather_agents.core.agent import BaseAgent, AgentState, Task, TaskResult
+from weather_agents.core.agent import AgentState, Task, TaskResult
 
 
 class TestBaseAgent:

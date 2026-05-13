@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -44,3 +44,12 @@ def mock_llm():
 def app_config():
     from weather_agents.core.config import AppConfig
     return AppConfig()
+
+
+@pytest.fixture
+def temp_config_dir(tmp_path):
+    """Isolate config tests to a temp directory so user config is not touched."""
+    user_cfg = tmp_path / ".weather-agents"
+    user_cfg.mkdir()
+    with patch("weather_agents.core.config.USER_CONFIG_DIR", user_cfg):
+        yield user_cfg

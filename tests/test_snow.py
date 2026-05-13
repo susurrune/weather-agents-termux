@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from weather_agents.core.agent import Task
 
 
 class TestSnowParseTaskPlan:

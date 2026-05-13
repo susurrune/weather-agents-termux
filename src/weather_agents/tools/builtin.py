@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from pathlib import Path
 
 import httpx
 
@@ -92,8 +91,18 @@ async def _shell_exec(command: str, timeout: int = 30, **kwargs) -> str:
     if base in _BLOCKED_COMMANDS:
         return f"Blocked: '{base}' is not allowed for security reasons."
 
-    # Check for dangerous argument patterns
+    # Resolve all path-like arguments to their canonical form
+    resolved_args = []
     for arg in args[1:]:
+        # If the arg looks like a path, normalize it
+        if "/" in arg or arg == "/":
+            try:
+                arg = os.path.normpath(arg)
+            except (ValueError, OSError):
+                pass
+        resolved_args.append(arg)
+
+    for arg in resolved_args:
         if arg in _DANGEROUS_ARGS:
             return f"Blocked: dangerous argument '{arg}'"
         # Check for rm with recursive force on root

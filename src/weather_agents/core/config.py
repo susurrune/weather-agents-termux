@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,6 +134,7 @@ def _save_user_cfg(data: dict) -> None:
     USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump(existing, f, allow_unicode=True, default_flow_style=False)
+    invalidate_cache()
 
 
 def _deep_merge(base: dict, override: dict) -> None:
@@ -154,6 +156,7 @@ def _write_yaml(path: Path, data: dict) -> None:
         os.chmod(path, 0o600)
     except PermissionError:
         pass
+    invalidate_cache()
 
 
 def _resolve_env(value: str) -> str:
@@ -163,10 +166,37 @@ def _resolve_env(value: str) -> str:
     return value
 
 
+# ── Config cache ────────────────────────────────────────────────────────
+
+_config_cache: AppConfig | None = None
+_config_cache_time: float = 0
+_CONFIG_CACHE_TTL: float = 2.0  # seconds
+
+
+def invalidate_cache() -> None:
+    """Force next load_config() to re-read from disk."""
+    global _config_cache, _config_cache_time
+    _config_cache = None
+    _config_cache_time = 0.0
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def load_config() -> AppConfig:
-    """Load config from default + user overrides + env vars."""
+    """Load config from default + user overrides + env vars, with TTL cache."""
+    global _config_cache, _config_cache_time
+
+    now = time.monotonic()
+    if _config_cache is not None and (now - _config_cache_time) < _CONFIG_CACHE_TTL:
+        return _config_cache
+
+    cfg = _load_config_uncached()
+    _config_cache = cfg
+    _config_cache_time = now
+    return cfg
+
+
+def _load_config_uncached() -> AppConfig:
     cfg = AppConfig()
 
     default_data = _load_yaml(CONFIG_DIR / "default.yaml")
@@ -272,7 +302,7 @@ def delete_config(key: str) -> tuple[bool, str]:
     path = USER_CONFIG_DIR / "config.yaml"
     data = _load_yaml(path)
     if not data:
-        return False, "no user config to delete from"
+        return True, "nothing to delete (config is empty)"
 
     parts = key.split(".")
 
@@ -288,7 +318,7 @@ def delete_config(key: str) -> tuple[bool, str]:
         agent_name = parts[1]
         VALID_AGENTS = ("fog", "rain", "frost", "snow", "dew")
         if agent_name not in VALID_AGENTS:
-            return False, f"unknown agent"
+            return False, "unknown agent"
         removed = data.get("agents", {}).get(agent_name, {}).pop("model", None)
         if removed:
             _write_yaml(path, data)

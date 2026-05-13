@@ -30,6 +30,3 @@ class FrostAgent(BaseAgent):
 - 问题分级清晰，一目了然
 - 每个问题都有具体的改进建议
 - 总结部分给出整体评价和优先改进方向"""
-
-    def get_specialty_prompt(self) -> str:
-        return "作为霜，你擅长审查代码、发现问题、优化质量。对于审查类任务，请严格检查，给出分级评估和改进建议。"
