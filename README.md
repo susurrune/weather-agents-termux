@@ -34,14 +34,13 @@
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                  CLI (Typer + Rich)                          │
-│                  Web Dashboard (FastAPI + WebSocket)         │
 ├───────────┬───────────┬───────────┬───────────┬──────────────┤
 │  🌫️ Fog   │  🌧️ Rain  │  ❄️ Frost  │  🌨️ Snow  │   💧 Dew     │
 │  探索研究  │  生成创造  │  审查优化  │  规划编排  │   运维集成   │
 ├───────────┴───────────┴───────────┴───────────┴──────────────┤
 │                    Skill System (15 composable skills)       │
 ├──────────────────────────────────────────────────────────────┤
-│          Tool Registry · 9 Built-in Tools · MCP Protocol     │
+│        Tool Registry · 15 Built-in Tools · MCP Protocol      │
 ├──────────────────────────────────────────────────────────────┤
 │              Event Bus (pub/sub · orchestration)              │
 ├────────────────────────────┬─────────────────────────────────┤
@@ -108,7 +107,6 @@ wa web
 | `wa chat [agent] [message]` | 对话（默认 `fog`，支持 `fog` `rain` `frost` `snow` `dew`）|
 | `wa task <goal>` | Snow Agent 拆解目标并调度多 Agent 协作 |
 | `wa status` | 查看所有 Agent 状态 |
-| `wa web` | 启动 Web Dashboard (`http://127.0.0.1:8765`) |
 | `wa config list\|set\|delete` | 查看/修改/删除配置 |
 | `wa memory status\|clear` | 查看/清除记忆 |
 
@@ -124,6 +122,8 @@ wa web
 | `/use <skill>` | 激活技能（增强提示词 + 扩展工具） |
 | `/deactivate` | 关闭所有技能 |
 | `/status` | Agent 状态一览 |
+| `/model [name]` | 查看/切换模型 |
+| `/apikey` | 管理 API keys |
 | `/cost` | 查看 Token 用量和费用 |
 | `/history` | 查看事件日志 |
 | `/mcp` | MCP 服务器状态 |
@@ -194,17 +194,20 @@ Goal: "搭建微服务项目"
 llm = LLMClient(config, cost_limit=5.0)  # 超过 $5 自动停止
 ```
 
-### Web Dashboard
+### Terminal Agent Tools
 
-```bash
-wa web  # http://127.0.0.1:8765
-```
+15 个内置工具，让 Agent 直接操作本地文件和执行命令：
 
-- WebSocket 实时流式响应
-- 多 Agent 对话 & 技能切换
-- 任务编排可视化
-- Session 隔离，支持多用户
-- 可选 Bearer Token 认证 (`WA_API_TOKEN`)
+| Tool | Description |
+|:-----|:------------|
+| `read_file` / `write_file` / `edit_file` | 文件读写编辑 |
+| `list_directory` / `tree` | 目录浏览 |
+| `move_file` / `copy_file` / `delete_file` | 文件管理 |
+| `file_search` / `code_search` | 搜索 |
+| `shell_exec` | 安全执行 Shell 命令 |
+| `http_get` / `http_post` | HTTP 请求 |
+| `web_search` | DuckDuckGo 搜索 |
+| `get_cwd` | 获取工作目录 |
 
 ### MCP Integration
 
@@ -244,7 +247,7 @@ def create_plugin() -> Plugin:
 
 配置按优先级从高到低合并：
 
-1. **环境变量** — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `WA_API_TOKEN`
+1. **环境变量** — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`
 2. **用户配置** — `~/.weather-agents/config.yaml`
 3. **项目配置** — `./config/default.yaml`
 
@@ -295,11 +298,10 @@ ruff format src/ tests/
 |:----------|:-----------|
 | Runtime | Python 3.11+ · asyncio |
 | LLM | LiteLLM (OpenAI / Anthropic / DeepSeek / Ollama) |
-| Web | FastAPI · WebSocket · Uvicorn |
-| CLI | Typer · Rich |
+| CLI | Typer · Rich (spinner, markdown, tables) |
 | Memory | aiosqlite · 3-layer architecture |
 | Search | DuckDuckGo (built-in, no API key) |
-| Tools | MCP Protocol · Plugin system |
+| Tools | 16 built-in · MCP Protocol · Plugin system |
 | CI | GitHub Actions · Ruff · MyPy · Pytest |
 
 ## License
