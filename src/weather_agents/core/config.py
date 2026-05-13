@@ -251,8 +251,31 @@ def _load_config_uncached() -> AppConfig:
         cfg.llm.api_keys["openai"] = os.getenv("OPENAI_API_KEY")
     if not cfg.llm.api_keys.get("anthropic") and os.getenv("ANTHROPIC_API_KEY"):
         cfg.llm.api_keys["anthropic"] = os.getenv("ANTHROPIC_API_KEY")
+    if not cfg.llm.api_keys.get("deepseek") and os.getenv("DEEPSEEK_API_KEY"):
+        cfg.llm.api_keys["deepseek"] = os.getenv("DEEPSEEK_API_KEY")
+
+    _sync_api_keys_to_env(cfg.llm.api_keys)
 
     return cfg
+
+
+_ENV_KEY_MAP = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
+
+
+def _sync_api_keys_to_env(api_keys: dict[str, str]) -> None:
+    """Push config API keys into environment so LiteLLM can find them."""
+    for provider, key in api_keys.items():
+        if not key:
+            continue
+        env_var = _ENV_KEY_MAP.get(provider)
+        if env_var:
+            os.environ[env_var] = key
+        else:
+            os.environ[f"{provider.upper()}_API_KEY"] = key
 
 
 def set_config(key: str, value: str) -> tuple[bool, str]:
@@ -312,6 +335,9 @@ def delete_config(key: str) -> tuple[bool, str]:
         removed = data.get("llm", {}).get("api_keys", {}).pop(provider, None)
         if removed:
             _write_yaml(path, data)
+        env_var = _ENV_KEY_MAP.get(provider, f"{provider.upper()}_API_KEY")
+        os.environ.pop(env_var, None)
+        if removed:
             return True, f"api_key.{provider} deleted"
         return True, f"api_key.{provider} not set"
 

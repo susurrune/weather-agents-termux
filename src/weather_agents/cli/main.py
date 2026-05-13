@@ -17,6 +17,7 @@ from weather_agents.core.config import (
     load_model_catalog,
     format_models_for_display,
     set_config,
+    _sync_api_keys_to_env,
     USER_CONFIG_DIR,
 )
 from weather_agents.core.factory import create_system_context, AGENT_CLASSES, AGENT_EMOJI
@@ -56,6 +57,8 @@ async def _interactive(agent_name: str | None = None) -> None:
             "[cyan]切换[/cyan]  /fog /rain /frost /snow /dew\n"
             "[cyan]编排[/cyan]  /task <目标>  — Snow 分解并协调多 Agent 完成\n"
             "[cyan]技能[/cyan]  /skills 查看  /use <技能> 激活  /deactivate 关闭\n"
+            "[cyan]模型[/cyan]  /model [名称]  — 查看或切换模型\n"
+            "[cyan]密钥[/cyan]  /apikey  — 管理 API Key（查看/添加/删除）\n"
             "[cyan]信息[/cyan]  /status 状态  /cost 费用  /history 事件\n"
             "[cyan]MCP[/cyan]   /mcp 查看 MCP 服务器状态\n"
             "[cyan]其他[/cyan]  /clear 清屏  /quit 退出",
@@ -111,6 +114,12 @@ async def _interactive(agent_name: str | None = None) -> None:
                 if goal:
                     await _run_task(goal, agents)
                 continue
+            if cmd_lower.startswith("/model"):
+                _handle_model_command(cmd, ctx)
+                continue
+            if cmd_lower.startswith("/apikey"):
+                _handle_apikey_command(cmd, ctx)
+                continue
             if cmd_lower.lstrip("/") in AGENT_CLASSES:
                 current = cmd_lower.lstrip("/")
                 agent = agents[current]
@@ -119,7 +128,7 @@ async def _interactive(agent_name: str | None = None) -> None:
             if cmd_lower.startswith("/"):
                 console.print(
                     "[dim]命令: /fog /rain /frost /snow /dew /task /skills /use "
-                    "/deactivate /status /cost /history /mcp /clear /quit[/dim]"
+                    "/deactivate /status /cost /history /mcp /model /apikey /clear /quit[/dim]"
                 )
                 continue
 
@@ -233,6 +242,128 @@ def _print_skills(agent) -> None:
         status = "✅ 激活" if sk["active"] else "  待用"
         tbl.add_row(sk["name"], sk["description"], status)
     console.print(tbl)
+
+
+# -- Model & API key management --------------------------------------------
+
+def _handle_model_command(cmd: str, ctx) -> None:
+    """Handle /model [name] — view or switch the default model at runtime."""
+    import os
+    parts = cmd.strip().split(maxsplit=1)
+    if len(parts) == 1:
+        # /model — show current model info
+        current = ctx.config.llm.default_model
+        console.print(f"[bold]当前模型:[/bold] {current}")
+        console.print()
+        tbl = Table(title="各 Agent 模型配置")
+        tbl.add_column("Agent", style="cyan")
+        tbl.add_column("模型", style="white")
+        for name in AGENT_CLASSES:
+            agent_cfg = getattr(ctx.config.agents, name, None)
+            model = (agent_cfg.model if agent_cfg and agent_cfg.model else current)
+            is_default = "" if agent_cfg and agent_cfg.model else " [dim](default)[/dim]"
+            tbl.add_row(f"{AGENT_EMOJI[name]} {name}", f"{model}{is_default}")
+        console.print(tbl)
+        console.print(
+            "\n[dim]切换: /model <模型名>  (如 deepseek/deepseek-chat, gpt-4o)\n"
+            "指定Agent: /model fog <模型名>\n"
+            "重置Agent: /model fog default[/dim]"
+        )
+        return
+
+    arg = parts[1].strip()
+    tokens = arg.split(maxsplit=1)
+
+    # /model <agent> <model> — set agent-specific model
+    if len(tokens) == 2 and tokens[0] in AGENT_CLASSES:
+        agent_name, model_name = tokens
+        if model_name.lower() == "default":
+            ok, msg = delete_config(f"model.{agent_name}")
+            if ok:
+                agent_cfg = getattr(ctx.config.agents, agent_name)
+                agent_cfg.model = ""
+            console.print(f"[green]{AGENT_EMOJI[agent_name]} {agent_name} → 使用默认模型[/green]")
+        else:
+            ok, msg = set_config(f"model.{agent_name}", model_name)
+            if ok:
+                agent_cfg = getattr(ctx.config.agents, agent_name)
+                agent_cfg.model = model_name
+            console.print(f"[green]{AGENT_EMOJI[agent_name]} {agent_name} → {model_name}[/green]")
+        return
+
+    # /model <model> — set default model
+    model_name = arg
+    ok, msg = set_config("default_model", model_name)
+    if ok:
+        ctx.config.llm.default_model = model_name
+        console.print(f"[green]默认模型 → {model_name}[/green]")
+    else:
+        console.print(f"[red]{msg}[/red]")
+
+
+def _handle_apikey_command(cmd: str, ctx) -> None:
+    """Handle /apikey — manage API keys interactively."""
+    import os
+    parts = cmd.strip().split(maxsplit=2)
+
+    if len(parts) == 1:
+        # /apikey — list all keys
+        keys = ctx.config.llm.api_keys
+        if not keys:
+            console.print("[dim]未配置任何 API Key[/dim]")
+        else:
+            tbl = Table(title="API Keys")
+            tbl.add_column("Provider", style="cyan")
+            tbl.add_column("Key", style="white")
+            tbl.add_column("状态", style="green")
+            for provider, key in keys.items():
+                masked = key[:8] + "****" + key[-4:] if len(key) > 16 else key[:4] + "****"
+                tbl.add_row(provider, masked, "✓ 已配置")
+            console.print(tbl)
+        console.print(
+            "\n[dim]添加/替换: /apikey set <provider> <key>\n"
+            "删除:      /apikey del <provider>\n"
+            "provider: openai, anthropic, deepseek, ...[/dim]"
+        )
+        return
+
+    action = parts[1].lower()
+
+    if action in ("set", "add") and len(parts) == 3:
+        # /apikey set provider key
+        tokens = parts[2].strip().split(maxsplit=1)
+        if len(tokens) != 2:
+            console.print("[red]用法: /apikey set <provider> <key>[/red]")
+            return
+        provider, key = tokens
+        provider = provider.lower()
+        ok, msg = set_config(f"api_key.{provider}", key)
+        if ok:
+            ctx.config.llm.api_keys[provider] = key
+            _sync_api_keys_to_env({provider: key})
+            masked = key[:8] + "****"
+            console.print(f"[green]✓ {provider} API Key 已设置 ({masked})[/green]")
+        else:
+            console.print(f"[red]{msg}[/red]")
+        return
+
+    if action in ("del", "delete", "rm", "remove"):
+        if len(parts) < 3:
+            console.print("[red]用法: /apikey del <provider>[/red]")
+            return
+        provider = parts[2].strip().lower()
+        ok, msg = delete_config(f"api_key.{provider}")
+        if ok:
+            ctx.config.llm.api_keys.pop(provider, None)
+            from weather_agents.core.config import _ENV_KEY_MAP
+            env_var = _ENV_KEY_MAP.get(provider, f"{provider.upper()}_API_KEY")
+            os.environ.pop(env_var, None)
+            console.print(f"[green]✓ {provider} API Key 已删除[/green]")
+        else:
+            console.print(f"[red]{msg}[/red]")
+        return
+
+    console.print("[red]用法: /apikey [set <provider> <key> | del <provider>][/red]")
 
 
 # -- Task orchestration ----------------------------------------------------

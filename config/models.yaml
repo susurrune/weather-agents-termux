@@ -38,14 +38,21 @@ anthropic:
     max_output: 8192
 
 deepseek:
-  deepseek-chat:
+  deepseek/deepseek-chat-v4-0324:
     provider: "deepseek"
     context_window: 128000
     max_output: 8192
-  deepseek-reasoner:
+    note: "DeepSeek V4 Flash"
+  deepseek/deepseek-reasoner-v4-0324:
     provider: "deepseek"
     context_window: 128000
     max_output: 8192
+    note: "DeepSeek V4 Pro"
+  deepseek/deepseek-chat:
+    provider: "deepseek"
+    context_window: 128000
+    max_output: 8192
+    note: "Legacy, alias for latest"
 
 local:
   ollama/llama3:
