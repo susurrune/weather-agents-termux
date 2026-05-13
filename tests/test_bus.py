@@ -32,7 +32,12 @@ class TestMessageBus:
             received.append(event)
 
         bus.subscribe("target_agent", handler)
-        event = Event(type=EventType.TASK_ASSIGNED, source="snow", target="target_agent", data={"task": "test"})
+        event = Event(
+            type=EventType.TASK_ASSIGNED,
+            source="snow",
+            target="target_agent",
+            data={"task": "test"},
+        )
 
         await bus.publish(event)
 
@@ -60,11 +65,13 @@ class TestMessageBus:
             received.append(event)
 
         bus.on_state_change(listener)
-        await bus.notify_state_change(Event(
-            type=EventType.STATE_CHANGE,
-            source="fog",
-            data={"old_state": "idle", "new_state": "thinking"},
-        ))
+        await bus.notify_state_change(
+            Event(
+                type=EventType.STATE_CHANGE,
+                source="fog",
+                data={"old_state": "idle", "new_state": "thinking"},
+            )
+        )
 
         assert len(received) == 1
         assert received[0].type == EventType.STATE_CHANGE
@@ -73,9 +80,13 @@ class TestMessageBus:
     @pytest.mark.asyncio
     async def test_history(self, bus):
         for i in range(5):
-            await bus.publish(Event(
-                type=EventType.SYSTEM_EVENT, source="system", data={"i": i},
-            ))
+            await bus.publish(
+                Event(
+                    type=EventType.SYSTEM_EVENT,
+                    source="system",
+                    data={"i": i},
+                )
+            )
 
         assert len(bus.get_history()) == 5
         assert len(bus.get_history(limit=2)) == 2

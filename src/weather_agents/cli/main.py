@@ -9,33 +9,32 @@ import time
 
 import typer
 from rich.console import Console
-from rich.rule import Rule
 
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
+from weather_agents import __version__
 from weather_agents.core.config import (
+    USER_CONFIG_DIR,
+    _sync_api_keys_to_env,
     delete_config,
+    format_models_for_display,
     load_config,
     load_model_catalog,
-    format_models_for_display,
     set_config,
-    _sync_api_keys_to_env,
-    USER_CONFIG_DIR,
 )
-from weather_agents import __version__
-from weather_agents.core.factory import create_system_context, AGENT_CLASSES, AGENT_EMOJI
-
+from weather_agents.core.factory import AGENT_CLASSES, AGENT_EMOJI, create_system_context
 
 app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=True)
 console = Console()
 
 
 # -- Spinner + status chat -------------------------------------------------
+
 
 async def _chat_single(agent_name: str, message: str) -> None:
     ctx = create_system_context()
@@ -123,7 +122,9 @@ async def _interactive(agent_name: str | None = None) -> None:
                 if agent.activate_skill(skill_name):
                     console.print(f"  [green]+ {skill_name}[/green]")
                 else:
-                    console.print(f"  [red]unknown skill: {skill_name}[/red] [dim](/skills to list)[/dim]")
+                    console.print(
+                        f"  [red]unknown skill: {skill_name}[/red] [dim](/skills to list)[/dim]"
+                    )
                 continue
             if cmd_lower == "/deactivate":
                 agent.deactivate_all_skills()
@@ -147,8 +148,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 current = cmd_lower.lstrip("/")
                 agent = agents[current]
                 console.print(
-                    f"  [dim]switched to[/dim] {agent.emoji} "
-                    f"[bold]{agent.display_name}[/bold]"
+                    f"  [dim]switched to[/dim] {agent.emoji} [bold]{agent.display_name}[/bold]"
                 )
                 continue
             if cmd_lower.startswith("/"):
@@ -165,8 +165,8 @@ async def _interactive(agent_name: str | None = None) -> None:
             )
             status_handle.start()
 
-            def _on_status(msg: str) -> None:
-                status_handle.update(f"[dim]{agent.emoji} {msg}[/dim]")
+            def _on_status(msg: str, _sh=status_handle, _ag=agent) -> None:
+                _sh.update(f"[dim]{_ag.emoji} {msg}[/dim]")
 
             try:
                 resp = await agent.chat(inp, on_status=_on_status)
@@ -188,12 +188,15 @@ async def _interactive(agent_name: str | None = None) -> None:
             _print_response(agent, resp, elapsed, interrupted)
 
     finally:
-        console.print(f"\n  [dim]bye[/dim]")
+        console.print("\n  [dim]bye[/dim]")
         await ctx.close_all()
 
 
 def _print_response(
-    agent, content: str, elapsed: float, interrupted: bool = False,
+    agent,
+    content: str,
+    elapsed: float,
+    interrupted: bool = False,
 ) -> None:
     """Print a finalized response with metadata footer."""
     header = Text()
@@ -215,6 +218,7 @@ def _print_response(
 
 # -- Welcome & Help --------------------------------------------------------
 
+
 def _print_welcome(model: str) -> None:
     console.print()
     logo = (
@@ -229,11 +233,11 @@ def _print_welcome(model: str) -> None:
     console.print(logo, justify="center")
 
     agents_info = [
-        ("\U0001f32b", "雾", "Fog",   "探索研究", "bright_white", "~ ~ ~"),
-        ("\U0001f327", "雨", "Rain",  "生成创造", "blue",         "' ' '"),
-        ("❄",     "霜", "Frost", "审查优化", "cyan",         "* + *"),
-        ("\U0001f328", "雪", "Snow",  "规划编排", "bright_white", ". * ."),
-        ("\U0001f4a7", "露", "Dew",   "运维集成", "green",        "o o o"),
+        ("\U0001f32b", "雾", "Fog", "探索研究", "bright_white", "~ ~ ~"),
+        ("\U0001f327", "雨", "Rain", "生成创造", "blue", "' ' '"),
+        ("❄", "霜", "Frost", "审查优化", "cyan", "* + *"),
+        ("\U0001f328", "雪", "Snow", "规划编排", "bright_white", ". * ."),
+        ("\U0001f4a7", "露", "Dew", "运维集成", "green", "o o o"),
     ]
 
     tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
@@ -322,6 +326,7 @@ def _print_help() -> None:
 
 # -- Display helpers -------------------------------------------------------
 
+
 def _print_status(agents: dict) -> None:
     console.print()
     tbl = Table(show_lines=False, box=None, padding=(0, 2, 0, 0))
@@ -332,14 +337,12 @@ def _print_status(agents: dict) -> None:
     tbl.add_column("Tokens", justify="right")
     for a in agents.values():
         s = a.get_status()
-        skills_str = ", ".join(
-            sk["name"] for sk in s.get("skills", []) if sk.get("active")
-        ) or "-"
+        skills_str = ", ".join(sk["name"] for sk in s.get("skills", []) if sk.get("active")) or "-"
         state_color = "green" if s["state"] == "idle" else "yellow"
-        tokens = f'{s["usage"]["prompt_tokens"]:,} / {s["usage"]["completion_tokens"]:,}'
+        tokens = f"{s['usage']['prompt_tokens']:,} / {s['usage']['completion_tokens']:,}"
         tbl.add_row(
-            f'{s["emoji"]} {s["display_name"]}',
-            f'[{state_color}]{s["state"]}[/{state_color}]',
+            f"{s['emoji']} {s['display_name']}",
+            f"[{state_color}]{s['state']}[/{state_color}]",
             skills_str,
             str(s["usage"]["calls"]),
             tokens,
@@ -357,8 +360,8 @@ def _print_cost(ctx) -> None:
     for name, s in stats.items():
         cost = s.get("cost", 0.0)
         total_cost += cost
-        tokens_in = f'{s.get("prompt_tokens", 0):,}'
-        tokens_out = f'{s.get("completion_tokens", 0):,}'
+        tokens_in = f"{s.get('prompt_tokens', 0):,}"
+        tokens_out = f"{s.get('completion_tokens', 0):,}"
         console.print(
             f"  [cyan]{name:<8}[/cyan]  "
             f"[dim]{s.get('calls', 0)} calls[/dim]  "
@@ -409,6 +412,7 @@ def _print_skills(agent) -> None:
 
 # -- Model & API key management --------------------------------------------
 
+
 def _handle_model_command(cmd: str, ctx) -> None:
     parts = cmd.strip().split(maxsplit=1)
     if len(parts) == 1:
@@ -416,7 +420,7 @@ def _handle_model_command(cmd: str, ctx) -> None:
         console.print(f"\n  [bold]default:[/bold] [cyan]{current}[/cyan]\n")
         for name in AGENT_CLASSES:
             agent_cfg = getattr(ctx.config.agents, name, None)
-            m = (agent_cfg.model if agent_cfg and agent_cfg.model else current)
+            m = agent_cfg.model if agent_cfg and agent_cfg.model else current
             marker = "" if agent_cfg and agent_cfg.model else " [dim](default)[/dim]"
             console.print(f"  {AGENT_EMOJI[name]} {name:<6}  {m}{marker}")
         console.print(
@@ -440,7 +444,9 @@ def _handle_model_command(cmd: str, ctx) -> None:
             set_config(f"model.{agent_name}", model_name)
             agent_cfg = getattr(ctx.config.agents, agent_name)
             agent_cfg.model = model_name
-            console.print(f"  [green]{AGENT_EMOJI[agent_name]} {agent_name} -> {model_name}[/green]")
+            console.print(
+                f"  [green]{AGENT_EMOJI[agent_name]} {agent_name} -> {model_name}[/green]"
+            )
         return
 
     model_name = arg
@@ -463,7 +469,9 @@ def _handle_apikey_command(cmd: str, ctx) -> None:
             console.print()
             for provider, key in keys.items():
                 masked = key[:8] + "****" + key[-4:] if len(key) > 16 else key[:4] + "****"
-                console.print(f"  [green]●[/green]  [cyan]{provider:<12}[/cyan]  [dim]{masked}[/dim]")
+                console.print(
+                    f"  [green]●[/green]  [cyan]{provider:<12}[/cyan]  [dim]{masked}[/dim]"
+                )
         console.print(
             "\n  [dim]/apikey set <provider> <key>    add or replace\n"
             "  /apikey del <provider>             remove[/dim]"
@@ -497,6 +505,7 @@ def _handle_apikey_command(cmd: str, ctx) -> None:
         if ok:
             ctx.config.llm.api_keys.pop(provider, None)
             from weather_agents.core.config import _ENV_KEY_MAP
+
             env_var = _ENV_KEY_MAP.get(provider, f"{provider.upper()}_API_KEY")
             os.environ.pop(env_var, None)
             console.print(f"  [green]- {provider} key removed[/green]")
@@ -508,6 +517,7 @@ def _handle_apikey_command(cmd: str, ctx) -> None:
 
 
 # -- Task orchestration ----------------------------------------------------
+
 
 async def _run_task(goal: str, agents=None) -> None:
     own_ctx = None
@@ -556,6 +566,7 @@ async def _run_task(goal: str, agents=None) -> None:
             def _make_cb(em, sh):
                 def _cb(msg):
                     sh.update(f"[dim]{em} {msg}[/dim]")
+
                 return _cb
 
             try:
@@ -588,14 +599,13 @@ async def _run_task(goal: str, agents=None) -> None:
                     r = results[t.id]
                     status = "OK" if r.success else "FAIL"
                     summary_prompt += (
-                        f"## Task {t.id} ({t.assigned_to}) {status}\n"
-                        f"{r.content[:500]}\n\n"
+                        f"## Task {t.id} ({t.assigned_to}) {status}\n{r.content[:500]}\n\n"
                     )
             console.print()
             with console.status("[dim]summarizing...[/dim]", spinner="dots"):
                 s = await snow.chat(summary_prompt)
 
-            console.print(f"  [bold]Summary[/bold]")
+            console.print("  [bold]Summary[/bold]")
             md = Markdown(s)
             console.print(md, width=min(console.width, 100))
     finally:
@@ -604,6 +614,7 @@ async def _run_task(goal: str, agents=None) -> None:
 
 
 # -- CLI commands ----------------------------------------------------------
+
 
 @app.command()
 def chat(
@@ -648,6 +659,7 @@ def status() -> None:
 
 
 # -- Config ----------------------------------------------------------------
+
 
 @app.command()
 def config(
@@ -705,6 +717,7 @@ def config(
 
 # -- Memory ----------------------------------------------------------------
 
+
 @app.command()
 def memory(
     action: str = typer.Argument("status", help="status / clear"),
@@ -730,7 +743,7 @@ def memory(
                         f"({count} messages)[/green]"
                     )
             else:
-                for name, agent in ctx.agent_map.items():
+                for _name, agent in ctx.agent_map.items():
                     short = len(agent.memory.short_term)
                     working = len(agent.memory.working)
                     long_term = await agent.memory.recall(limit=100)
@@ -746,6 +759,7 @@ def memory(
 
 
 # -- Version ---------------------------------------------------------------
+
 
 @app.command()
 def version() -> None:

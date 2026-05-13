@@ -78,17 +78,19 @@ class SnowAgent(BaseAgent):
 
         for task in tasks:
             if task.assigned_to and task.assigned_to != self.name:
-                await self.bus.publish(Event(
-                    type=EventType.TASK_ASSIGNED,
-                    source=self.name,
-                    target=task.assigned_to,
-                    data={
-                        "id": task.id,
-                        "description": task.description,
-                        "parent_id": task.parent_id,
-                        "metadata": task.metadata,
-                    },
-                ))
+                await self.bus.publish(
+                    Event(
+                        type=EventType.TASK_ASSIGNED,
+                        source=self.name,
+                        target=task.assigned_to,
+                        data={
+                            "id": task.id,
+                            "description": task.description,
+                            "parent_id": task.parent_id,
+                            "metadata": task.metadata,
+                        },
+                    )
+                )
 
         return tasks
 
@@ -121,7 +123,7 @@ class SnowAgent(BaseAgent):
             pending = [t for t in tasks if t.assigned_to and t.assigned_to != self.name]
             completed: set[str] = set()
 
-            async def _run(t: Task) -> None:
+            async def _run(t: Task, _completed: set = completed) -> None:
                 agent = agents.get(t.assigned_to)
                 if not agent:
                     return
@@ -134,14 +136,11 @@ class SnowAgent(BaseAgent):
                     "content": result.content,
                 }
                 if result.success:
-                    completed.add(t.id)
+                    _completed.add(t.id)
 
             # Execute with dependency ordering
             while pending:
-                batch = [
-                    t for t in pending
-                    if not t.parent_id or t.parent_id in completed
-                ]
+                batch = [t for t in pending if not t.parent_id or t.parent_id in completed]
                 if not batch:
                     batch = pending[:1]
                 for t in batch:
@@ -224,21 +223,23 @@ class SnowAgent(BaseAgent):
     def _plan_to_tasks(plan: dict, goal: str) -> list[Task]:
         """Convert a parsed plan dict to Task objects."""
         valid_agents = {"fog", "rain", "frost", "snow", "dew"}
-        tasks = []
+        tasks: list[Task] = []
         for step in plan.get("steps", []):
             agent = step.get("agent", "rain")
             if agent not in valid_agents:
                 agent = "rain"
             depends = step.get("depends_on", [])
             parent_id = depends[0] if depends else None
-            tasks.append(Task(
-                id=str(step.get("id", len(tasks) + 1)),
-                description=step.get("description", ""),
-                assigned_to=agent,
-                parent_id=parent_id,
-                metadata={
-                    "goal": goal,
-                    "priority": step.get("priority", "medium"),
-                },
-            ))
+            tasks.append(
+                Task(
+                    id=str(step.get("id", len(tasks) + 1)),
+                    description=step.get("description", ""),
+                    assigned_to=agent,
+                    parent_id=parent_id,
+                    metadata={
+                        "goal": goal,
+                        "priority": step.get("priority", "medium"),
+                    },
+                )
+            )
         return tasks

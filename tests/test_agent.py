@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import pytest
 
 from weather_agents.core.agent import AgentState, Task, TaskResult
@@ -32,6 +31,7 @@ class TestBaseAgent:
     async def test_concrete_agent_init(self, app_config, mock_llm, bus, tool_registry):
         """Verify a concrete FogAgent can init without error."""
         from weather_agents.agents.fog import FogAgent
+
         agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
         await agent.init()
         assert agent.name == "fog"
@@ -42,6 +42,7 @@ class TestBaseAgent:
     @pytest.mark.asyncio
     async def test_chat_returns_response(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.fog import FogAgent
+
         agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
         await agent.init()
         response = await agent.chat("hello")
@@ -51,6 +52,7 @@ class TestBaseAgent:
     @pytest.mark.asyncio
     async def test_execute_task(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.rain import RainAgent
+
         agent = RainAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
         await agent.init()
         task = Task(id="1", description="write code", assigned_to="rain")
@@ -62,6 +64,7 @@ class TestBaseAgent:
     @pytest.mark.asyncio
     async def test_get_status(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.fog import FogAgent
+
         agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
         await agent.init()
         status = agent.get_status()
@@ -72,17 +75,18 @@ class TestBaseAgent:
     @pytest.mark.asyncio
     async def test_agent_has_system_prompt(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.dew import DewAgent
+
         agent = DewAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
         assert "露" in agent.system_prompt
         assert "运维" in agent.specialty
         await agent.close()
 
     def test_all_agent_classes_have_required_attrs(self):
-        from weather_agents.agents.fog import FogAgent
-        from weather_agents.agents.rain import RainAgent
-        from weather_agents.agents.frost import FrostAgent
-        from weather_agents.agents.snow import SnowAgent
         from weather_agents.agents.dew import DewAgent
+        from weather_agents.agents.fog import FogAgent
+        from weather_agents.agents.frost import FrostAgent
+        from weather_agents.agents.rain import RainAgent
+        from weather_agents.agents.snow import SnowAgent
 
         for cls in [FogAgent, RainAgent, FrostAgent, SnowAgent, DewAgent]:
             assert cls.name, f"{cls.__name__} missing name"
@@ -119,6 +123,7 @@ class TestSkillSystem:
     def test_agent_skill_names_loaded(self):
         """Verify FogAgent has correct skill_names from class attribute."""
         from weather_agents.agents.fog import FogAgent
+
         assert "web_research" in FogAgent.skill_names
         assert "code_analysis" in FogAgent.skill_names
         assert "document_analysis" in FogAgent.skill_names
@@ -128,20 +133,38 @@ class TestSkillSystem:
         """Activate a skill via SkillRegistry."""
         reg = SkillRegistry()
         # Register all FogAgent's skills so _load_skills picks them up
-        reg.register(Skill(name="web_research", description="research", system_prompt="你擅长调研", required_tools=["read_file"]))
+        reg.register(
+            Skill(
+                name="web_research",
+                description="research",
+                system_prompt="你擅长调研",
+                required_tools=["read_file"],
+            )
+        )
         reg.register(Skill(name="code_analysis", description="analysis", system_prompt="分析"))
         reg.register(Skill(name="document_analysis", description="docs", system_prompt="文档"))
 
         # Register the required tool
         from weather_agents.core.tool import Tool, ToolParameter
-        tool_registry.register(Tool(
-            name="read_file", description="read",
-            parameters=[ToolParameter(name="path", type="string", description="path")],
-            handler=lambda **kw: "content",
-        ))
+
+        tool_registry.register(
+            Tool(
+                name="read_file",
+                description="read",
+                parameters=[ToolParameter(name="path", type="string", description="path")],
+                handler=lambda **kw: "content",
+            )
+        )
 
         from weather_agents.agents.fog import FogAgent
-        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry, skill_registry=reg)
+
+        agent = FogAgent(
+            config=app_config,
+            llm=mock_llm,
+            bus=bus,
+            tool_registry=tool_registry,
+            skill_registry=reg,
+        )
         await agent.init()
 
         assert agent.activate_skill("web_research") is True
@@ -152,12 +175,25 @@ class TestSkillSystem:
     async def test_deactivate_skill(self, app_config, mock_llm, bus, tool_registry):
         reg = SkillRegistry()
         # Use FogAgent's actual skill names
-        reg.register(Skill(name="web_research", description="research", system_prompt="research prompt"))
-        reg.register(Skill(name="code_analysis", description="analysis", system_prompt="analysis prompt"))
-        reg.register(Skill(name="document_analysis", description="docs", system_prompt="docs prompt"))
+        reg.register(
+            Skill(name="web_research", description="research", system_prompt="research prompt")
+        )
+        reg.register(
+            Skill(name="code_analysis", description="analysis", system_prompt="analysis prompt")
+        )
+        reg.register(
+            Skill(name="document_analysis", description="docs", system_prompt="docs prompt")
+        )
 
         from weather_agents.agents.fog import FogAgent
-        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry, skill_registry=reg)
+
+        agent = FogAgent(
+            config=app_config,
+            llm=mock_llm,
+            bus=bus,
+            tool_registry=tool_registry,
+            skill_registry=reg,
+        )
         await agent.init()
 
         agent.activate_skill("web_research")
@@ -176,7 +212,14 @@ class TestSkillSystem:
         reg.register(Skill(name="document_analysis", description="Document analysis"))
 
         from weather_agents.agents.fog import FogAgent
-        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry, skill_registry=reg)
+
+        agent = FogAgent(
+            config=app_config,
+            llm=mock_llm,
+            bus=bus,
+            tool_registry=tool_registry,
+            skill_registry=reg,
+        )
         await agent.init()
 
         available = agent.get_available_skills()
@@ -191,6 +234,7 @@ class TestSkillSystem:
         reg.register(Skill(name="demo", description="demo skill"))
 
         from unittest.mock import Mock
+
         agent = Mock()
         agent.get_status.return_value = {
             "name": "test",

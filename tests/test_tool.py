@@ -2,24 +2,36 @@
 
 from __future__ import annotations
 
-
 from weather_agents.core.tool import Tool, ToolParameter, ToolRegistry
 
 
 class TestTool:
     def test_basic_tool(self):
-        tool = Tool(name="echo", description="Echo input", parameters=[
-            ToolParameter(name="msg", type="string", description="Message to echo"),
-        ])
+        tool = Tool(
+            name="echo",
+            description="Echo input",
+            parameters=[
+                ToolParameter(name="msg", type="string", description="Message to echo"),
+            ],
+        )
         assert tool.name == "echo"
         assert len(tool.parameters) == 1
 
     def test_function_schema(self):
-        tool = Tool(name="read_file", description="Read a file", parameters=[
-            ToolParameter(name="path", type="string", description="File path"),
-            ToolParameter(name="max_lines", type="number", description="Max lines",
-                          required=False, default=100),
-        ])
+        tool = Tool(
+            name="read_file",
+            description="Read a file",
+            parameters=[
+                ToolParameter(name="path", type="string", description="File path"),
+                ToolParameter(
+                    name="max_lines",
+                    type="number",
+                    description="Max lines",
+                    required=False,
+                    default=100,
+                ),
+            ],
+        )
         schema = tool.to_function_schema()
         assert schema["function"]["name"] == "read_file"
         assert "path" in schema["function"]["parameters"]["properties"]
@@ -29,6 +41,7 @@ class TestTool:
     def test_execute_without_handler_returns_error(self):
         tool = Tool(name="stub", description="No handler")
         import asyncio
+
         result = asyncio.run(tool.execute())
         assert "has no handler" in result
 
@@ -38,6 +51,7 @@ class TestTool:
 
         tool = Tool(name="greet", description="Greet", handler=my_handler)
         import asyncio
+
         result = asyncio.run(tool.execute(name="world"))
         assert result == "hello world"
 
@@ -51,9 +65,15 @@ class TestTool:
                 raise ValueError("transient error")
             return "success"
 
-        tool = Tool(name="flaky", description="Flaky tool", handler=flaky_handler,
-                     max_retries=3, retry_delay=0.01)
+        tool = Tool(
+            name="flaky",
+            description="Flaky tool",
+            handler=flaky_handler,
+            max_retries=3,
+            retry_delay=0.01,
+        )
         import asyncio
+
         result = asyncio.run(tool.execute())
         assert result == "success"
         assert call_count == 3
@@ -62,9 +82,15 @@ class TestTool:
         async def always_fails(**kwargs):
             raise ValueError("always fails")
 
-        tool = Tool(name="bad", description="Bad tool", handler=always_fails,
-                     max_retries=2, retry_delay=0.01)
+        tool = Tool(
+            name="bad",
+            description="Bad tool",
+            handler=always_fails,
+            max_retries=2,
+            retry_delay=0.01,
+        )
         import asyncio
+
         result = asyncio.run(tool.execute())
         assert "Error" in result
         assert "retries" in result
@@ -96,9 +122,15 @@ class TestToolRegistry:
 
     def test_schemas(self):
         r = ToolRegistry()
-        r.register(Tool(name="my_tool", description="My tool", parameters=[
-            ToolParameter(name="p", type="string", description="A param"),
-        ]))
+        r.register(
+            Tool(
+                name="my_tool",
+                description="My tool",
+                parameters=[
+                    ToolParameter(name="p", type="string", description="A param"),
+                ],
+            )
+        )
         schemas = r.get_schemas()
         assert len(schemas) == 1
         assert schemas[0]["function"]["name"] == "my_tool"

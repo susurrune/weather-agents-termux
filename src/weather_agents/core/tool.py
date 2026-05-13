@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine
+from typing import Any
 
 
 @dataclass
@@ -64,7 +65,7 @@ class Tool:
             except Exception as e:
                 last_error = str(e)
                 if attempt < self.max_retries:
-                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
                 continue
 
         return f"Error executing tool '{self.name}' after {self.max_retries} retries: {last_error}"

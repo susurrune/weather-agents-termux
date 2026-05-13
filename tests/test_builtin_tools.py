@@ -115,10 +115,10 @@ class TestWebSearch:
     async def test_parse_ddg_results(self):
         from weather_agents.tools.builtin import _parse_ddg_results
 
-        html = '''
+        html = """
         <a class="result__a" href="http://example.com">Example Title</a>
         <a class="result__snippet">This is a snippet</a>
-        '''
+        """
         results = _parse_ddg_results(html, 5)
         assert len(results) == 1
         assert results[0]["title"] == "Example Title"
@@ -145,3 +145,133 @@ class TestHttpTools:
 
         result = await _http_post("not-a-url", "data")
         assert "Error" in result
+
+
+class TestDirectoryTools:
+    @pytest.mark.asyncio
+    async def test_list_directory(self, tmp_path):
+        from weather_agents.tools.builtin import _list_directory
+
+        (tmp_path / "file.txt").write_text("hello")
+        (tmp_path / "subdir").mkdir()
+        result = await _list_directory(str(tmp_path))
+        assert "file.txt" in result
+        assert "subdir/" in result
+
+    @pytest.mark.asyncio
+    async def test_list_directory_not_found(self):
+        from weather_agents.tools.builtin import _list_directory
+
+        result = await _list_directory("/nonexistent/path")
+        assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_list_directory_empty(self, tmp_path):
+        from weather_agents.tools.builtin import _list_directory
+
+        result = await _list_directory(str(tmp_path))
+        assert "Empty" in result
+
+    @pytest.mark.asyncio
+    async def test_tree(self, tmp_path):
+        from weather_agents.tools.builtin import _tree
+
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "b.txt").write_text("x")
+        (tmp_path / "c.txt").write_text("y")
+        result = await _tree(str(tmp_path), max_depth=2)
+        assert "b.txt" in result
+        assert "c.txt" in result
+
+    @pytest.mark.asyncio
+    async def test_tree_max_depth(self, tmp_path):
+        from weather_agents.tools.builtin import _tree
+
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "b").mkdir()
+        (tmp_path / "a" / "b" / "c.txt").write_text("deep")
+        result = await _tree(str(tmp_path), max_depth=1)
+        assert "a/" in result
+        assert "c.txt" not in result
+
+
+class TestFileManagementTools:
+    @pytest.mark.asyncio
+    async def test_move_file(self, tmp_path):
+        from weather_agents.tools.builtin import _move_file
+
+        src = tmp_path / "src.txt"
+        src.write_text("content")
+        dst = tmp_path / "dst.txt"
+        result = await _move_file(str(src), str(dst))
+        assert "Moved" in result
+        assert not src.exists()
+        assert dst.read_text() == "content"
+
+    @pytest.mark.asyncio
+    async def test_move_file_not_found(self, tmp_path):
+        from weather_agents.tools.builtin import _move_file
+
+        result = await _move_file("/nonexistent", str(tmp_path / "dst"))
+        assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_copy_file(self, tmp_path):
+        from weather_agents.tools.builtin import _copy_file
+
+        src = tmp_path / "src.txt"
+        src.write_text("content")
+        dst = tmp_path / "copy.txt"
+        result = await _copy_file(str(src), str(dst))
+        assert "Copied" in result
+        assert src.exists()
+        assert dst.read_text() == "content"
+
+    @pytest.mark.asyncio
+    async def test_copy_directory(self, tmp_path):
+        from weather_agents.tools.builtin import _copy_file
+
+        src_dir = tmp_path / "srcdir"
+        src_dir.mkdir()
+        (src_dir / "a.txt").write_text("a")
+        dst_dir = tmp_path / "dstdir"
+        result = await _copy_file(str(src_dir), str(dst_dir))
+        assert "Copied" in result
+        assert (dst_dir / "a.txt").read_text() == "a"
+
+    @pytest.mark.asyncio
+    async def test_delete_file(self, tmp_path):
+        from weather_agents.tools.builtin import _delete_file
+
+        f = tmp_path / "del.txt"
+        f.write_text("bye")
+        result = await _delete_file(str(f))
+        assert "Deleted" in result
+        assert not f.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_empty_dir(self, tmp_path):
+        from weather_agents.tools.builtin import _delete_file
+
+        d = tmp_path / "emptydir"
+        d.mkdir()
+        result = await _delete_file(str(d))
+        assert "Deleted" in result
+        assert not d.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_nonempty_dir(self, tmp_path):
+        from weather_agents.tools.builtin import _delete_file
+
+        d = tmp_path / "nonempty"
+        d.mkdir()
+        (d / "file.txt").write_text("x")
+        result = await _delete_file(str(d))
+        assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_get_cwd(self):
+        from weather_agents.tools.builtin import _get_cwd
+
+        result = await _get_cwd()
+        assert os.path.isabs(result)

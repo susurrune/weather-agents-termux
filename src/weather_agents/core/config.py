@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -9,12 +10,12 @@ from pathlib import Path
 
 import yaml
 
-
 CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "config"
 USER_CONFIG_DIR = Path.home() / ".weather-agents"
 
 
 # ── Model Catalog ──────────────────────────────────────────────────────────
+
 
 def load_model_catalog() -> dict[str, list[dict]]:
     """Load available models from models.yaml, grouped by provider."""
@@ -37,11 +38,14 @@ def format_models_for_display(catalog: dict[str, list[dict]]) -> str:
     for provider, models in catalog.items():
         lines.append(f"  [{provider.upper()}]")
         for m in models:
-            lines.append(f"    {m['name']}  (ctx={m.get('context_window', '?')}, max={m.get('max_output', '?')})")
+            lines.append(
+                f"    {m['name']}  (ctx={m.get('context_window', '?')}, max={m.get('max_output', '?')})"
+            )
     return "\n".join(lines)
 
 
 # ── Config dataclasses ─────────────────────────────────────────────────────
+
 
 @dataclass
 class LLMConfig:
@@ -120,6 +124,7 @@ class AppConfig:
 
 # ── Load / Save helpers ────────────────────────────────────────────────────
 
+
 def _load_yaml(path: Path) -> dict:
     if path.exists():
         with open(path, encoding="utf-8") as f:
@@ -153,10 +158,8 @@ def _write_yaml(path: Path, data: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
     # Restrict permissions to owner-only for sensitive data (API keys)
-    try:
+    with contextlib.suppress(PermissionError):
         os.chmod(path, 0o600)
-    except PermissionError:
-        pass
     invalidate_cache()
 
 
@@ -182,6 +185,7 @@ def invalidate_cache() -> None:
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
+
 
 def load_config() -> AppConfig:
     """Load config from default + user overrides + env vars, with TTL cache."""
@@ -237,22 +241,21 @@ def _load_config_uncached() -> AppConfig:
         cfg.memory.short_term_limit = mem.get("short_term_limit", cfg.memory.short_term_limit)
 
     # MCP (with env var resolution)
-    if mcp := merged.get("mcp"):
-        if servers := mcp.get("servers"):
-            resolved = []
-            for s in servers:
-                env = {k: _resolve_env(v) for k, v in s.get("env", {}).items()}
-                s["env"] = env
-                resolved.append(s)
-            cfg.mcp.servers = resolved
+    if (mcp := merged.get("mcp")) and (servers := mcp.get("servers")):
+        resolved = []
+        for s in servers:
+            env = {k: _resolve_env(v) for k, v in s.get("env", {}).items()}
+            s["env"] = env
+            resolved.append(s)
+        cfg.mcp.servers = resolved
 
     # API keys from env vars (lowest priority)
     if not cfg.llm.api_keys.get("openai") and os.getenv("OPENAI_API_KEY"):
-        cfg.llm.api_keys["openai"] = os.getenv("OPENAI_API_KEY")
+        cfg.llm.api_keys["openai"] = os.getenv("OPENAI_API_KEY", "")
     if not cfg.llm.api_keys.get("anthropic") and os.getenv("ANTHROPIC_API_KEY"):
-        cfg.llm.api_keys["anthropic"] = os.getenv("ANTHROPIC_API_KEY")
+        cfg.llm.api_keys["anthropic"] = os.getenv("ANTHROPIC_API_KEY", "")
     if not cfg.llm.api_keys.get("deepseek") and os.getenv("DEEPSEEK_API_KEY"):
-        cfg.llm.api_keys["deepseek"] = os.getenv("DEEPSEEK_API_KEY")
+        cfg.llm.api_keys["deepseek"] = os.getenv("DEEPSEEK_API_KEY", "")
 
     _sync_api_keys_to_env(cfg.llm.api_keys)
 
@@ -306,12 +309,12 @@ def set_config(key: str, value: str) -> tuple[bool, str]:
     # Simple keys under llm
     SIMPLE_LLM_KEYS = ("default_model", "temperature", "max_tokens", "timeout")
     if key in SIMPLE_LLM_KEYS:
-        typed = value
+        typed_val: str | float | int = value
         if key in ("temperature",):
-            typed = float(value)
+            typed_val = float(value)
         elif key in ("max_tokens", "timeout"):
-            typed = int(value)
-        _save_user_cfg({"llm": {key: typed}})
+            typed_val = int(value)
+        _save_user_cfg({"llm": {key: typed_val}})
         return True, f"{key} → {value}"
 
     return False, f"unknown config key: {key}"

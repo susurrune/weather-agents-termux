@@ -72,7 +72,7 @@ class PluginLoader:
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
                 if isinstance(attr, type) and issubclass(attr, Plugin) and attr is not Plugin:
-                    return attr()
+                    return attr()  # type: ignore[call-arg]
 
             return None
         except Exception as e:

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Callable, Coroutine
+import contextlib
 from collections import defaultdict
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     TASK_ASSIGNED = "task_assigned"
     TASK_COMPLETED = "task_completed"
     TASK_FEEDBACK = "task_feedback"
@@ -27,7 +29,7 @@ class Event:
     source: str  # agent name or "system"
     target: str | None = None  # None = broadcast
     data: dict = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 Handler = Callable[[Event], Coroutine[Any, Any, None]]
@@ -59,41 +61,35 @@ class MessageBus:
         """Record event without routing (for state changes / local observation)."""
         self._history.append(event)
         if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history:]
+            self._history = self._history[-self._max_history :]
 
     async def notify_state_change(self, event: Event) -> None:
         """Notify state change listeners (must be called from async context)."""
         if event.type != EventType.STATE_CHANGE:
             return
         for handler in self._state_listeners:
-            try:
+            with contextlib.suppress(Exception):
                 await handler(event)
-            except Exception:
-                pass
 
     async def publish(self, event: Event) -> None:
         self._history.append(event)
         if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history:]
+            self._history = self._history[-self._max_history :]
 
         if event.target:
             # Direct message
             handlers = self._subscribers.get(event.target, [])
             for handler in handlers:
-                try:
+                with contextlib.suppress(Exception):
                     await handler(event)
-                except Exception:
-                    pass
         else:
             # Broadcast
             for name, handlers in self._subscribers.items():
                 if name == event.source:
                     continue
                 for handler in handlers:
-                    try:
+                    with contextlib.suppress(Exception):
                         await handler(event)
-                    except Exception:
-                        pass
 
     def get_history(
         self,

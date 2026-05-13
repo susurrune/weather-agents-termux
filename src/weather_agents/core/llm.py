@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
-
 import os
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any
+
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import litellm
@@ -84,7 +85,7 @@ class LLMClient:
         if agent_name:
             agent_cfg = getattr(self.config.agents, agent_name, None)
             if agent_cfg and agent_cfg.model:
-                return agent_cfg.model
+                return str(agent_cfg.model)
         return self.config.llm.default_model
 
     def _get_retries(self) -> int:
@@ -146,7 +147,11 @@ class LLMClient:
         for attempt_model in models_to_try:
             try:
                 return await self._complete_with_retry(
-                    attempt_model, messages, agent_name, tools, stream,
+                    attempt_model,
+                    messages,
+                    agent_name,
+                    tools,
+                    stream,
                 )
             except Exception as e:
                 last_error = e
@@ -224,25 +229,30 @@ class LLMClient:
                                 args = json.loads(args)
                             except json.JSONDecodeError:
                                 args = {"raw": args}
-                        tool_calls.append({
-                            "id": tc.id,
-                            "name": tc.function.name,
-                            "arguments": args,
-                        })
+                        tool_calls.append(
+                            {
+                                "id": tc.id,
+                                "name": tc.function.name,
+                                "arguments": args,
+                            }
+                        )
 
                 prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-                completion_tokens = (
-                    response.usage.completion_tokens if response.usage else 0
-                )
+                completion_tokens = response.usage.completion_tokens if response.usage else 0
                 actual_model = response.model or model
 
                 self._track_usage(
-                    agent_name, actual_model, prompt_tokens, completion_tokens,
+                    agent_name,
+                    actual_model,
+                    prompt_tokens,
+                    completion_tokens,
                 )
 
                 log_event(
-                    log, "llm_call",
-                    model=actual_model, agent=agent_name,
+                    log,
+                    "llm_call",
+                    model=actual_model,
+                    agent=agent_name,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     duration_ms=round(elapsed * 1000),
@@ -261,19 +271,23 @@ class LLMClient:
                         "completion_tokens": completion_tokens,
                     },
                     cost=estimate_cost(
-                        actual_model, prompt_tokens, completion_tokens,
+                        actual_model,
+                        prompt_tokens,
+                        completion_tokens,
                     ),
                 )
 
             except Exception as e:
                 last_error = e
                 status = getattr(e, "status_code", 0) or getattr(
-                    e, "http_status", 0,
+                    e,
+                    "http_status",
+                    0,
                 )
                 is_retryable = status in _RETRYABLE_STATUSES or not status
 
                 if is_retryable and attempt < max_retries:
-                    delay = min(2 ** attempt * 1.0, 10.0)
+                    delay = min(2**attempt * 1.0, 10.0)
                     log.warning(
                         "llm_retry",
                         extra={
@@ -322,13 +336,15 @@ class LLMClient:
             completion_tokens = max(1, len(full_content) // 4)
             self._track_usage(agent_name, model, prompt_tokens, completion_tokens)
             log_event(
-                log, "llm_stream",
-                model=model, agent=agent_name,
+                log,
+                "llm_stream",
+                model=model,
+                agent=agent_name,
                 duration_ms=round(elapsed * 1000),
                 chars=len(full_content),
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             yield f"\n[Stream timed out after {self.config.llm.timeout}s]"
         except Exception as e:
             yield f"\n[Stream error: {e}]"

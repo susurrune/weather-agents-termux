@@ -11,8 +11,8 @@ import httpx
 
 from weather_agents.core.tool import Tool, ToolParameter, global_registry
 
-
 # -- File Tools --
+
 
 async def _read_file(path: str, **kwargs) -> str:
     try:
@@ -49,6 +49,7 @@ async def _edit_file(path: str, old_text: str, new_text: str, **kwargs) -> str:
 
 
 # -- Search Tools --
+
 
 async def _list_directory(path: str = ".", **kwargs) -> str:
     """List files and directories with basic metadata."""
@@ -118,6 +119,7 @@ async def _move_file(src: str, dst: str, **kwargs) -> str:
     """Move or rename a file or directory."""
     try:
         import shutil
+
         os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
         shutil.move(src, dst)
         return f"Moved: {src} -> {dst}"
@@ -129,6 +131,7 @@ async def _copy_file(src: str, dst: str, **kwargs) -> str:
     """Copy a file or directory."""
     try:
         import shutil
+
         os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
         if os.path.isdir(src):
             shutil.copytree(src, dst)
@@ -170,19 +173,27 @@ async def _code_search(directory: str, query: str, **kwargs) -> str:
     try:
         result = subprocess.run(
             [
-                "grep", "-rn",
-                "--include=*.py", "--include=*.ts", "--include=*.js",
-                "--include=*.go", "--include=*.rs", "--include=*.java",
-                "--include=*.yaml", "--include=*.json",
-                query, directory,
+                "grep",
+                "-rn",
+                "--include=*.py",
+                "--include=*.ts",
+                "--include=*.js",
+                "--include=*.go",
+                "--include=*.rs",
+                "--include=*.java",
+                "--include=*.yaml",
+                "--include=*.json",
+                query,
+                directory,
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         output = result.stdout[:10000] if result.stdout else "No matches found"
         return output
     except FileNotFoundError:
         # grep not available, fall back to Python
-        import re
         matches = []
         for root, _, files in os.walk(directory):
             for f in files:
@@ -206,8 +217,20 @@ async def _code_search(directory: str, query: str, **kwargs) -> str:
 # -- Shell Tool (safe mode) --
 
 _BLOCKED_COMMANDS = {
-    "dd", "mkfs", "fdisk", "parted", "shutdown", "reboot", "init", "poweroff",
-    "halt", "grub-mkconfig", "update-grub", "passwd", "adduser", "userdel",
+    "dd",
+    "mkfs",
+    "fdisk",
+    "parted",
+    "shutdown",
+    "reboot",
+    "init",
+    "poweroff",
+    "halt",
+    "grub-mkconfig",
+    "update-grub",
+    "passwd",
+    "adduser",
+    "userdel",
     "format",
 }
 
@@ -235,7 +258,9 @@ async def _shell_exec(command: str, timeout: int = 30, **kwargs) -> str:
     try:
         result = subprocess.run(
             args,
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         output = ""
         if result.stdout:
@@ -300,6 +325,7 @@ async def _http_post(url: str, data: str = "", **kwargs) -> str:
 
 # -- Web Search (DuckDuckGo HTML scraping) --
 
+
 async def _web_search(query: str, num_results: int = 5, **kwargs) -> str:
     """Search the web using DuckDuckGo HTML endpoint."""
     try:
@@ -333,7 +359,7 @@ def _parse_ddg_results(html: str, max_results: int) -> list[dict]:
     """Extract search results from DuckDuckGo HTML response."""
     import re
 
-    results = []
+    results: list[dict] = []
     # DuckDuckGo HTML results are in <a class="result__a"> tags
     pattern = re.compile(
         r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
@@ -350,6 +376,7 @@ def _parse_ddg_results(html: str, max_results: int) -> list[dict]:
         # DuckDuckGo wraps URLs in a redirect
         if "uddg=" in url:
             from urllib.parse import parse_qs, unquote
+
             try:
                 qs = parse_qs(urlparse(url).query)
                 url = unquote(qs.get("uddg", [url])[0])
@@ -404,7 +431,9 @@ def register_builtin_tools() -> None:
             name="file_search",
             description="Search for files matching a glob pattern recursively",
             parameters=[
-                ToolParameter(name="directory", type="string", description="Directory to search in"),
+                ToolParameter(
+                    name="directory", type="string", description="Directory to search in"
+                ),
                 ToolParameter(name="pattern", type="string", description="Glob pattern to match"),
             ],
             handler=_file_search,
@@ -422,10 +451,15 @@ def register_builtin_tools() -> None:
             name="shell_exec",
             description="Execute a shell command safely (dangerous commands are blocked)",
             parameters=[
-                ToolParameter(name="command", type="string", description="Shell command to execute"),
                 ToolParameter(
-                    name="timeout", type="number", description="Timeout in seconds",
-                    required=False, default=30,
+                    name="command", type="string", description="Shell command to execute"
+                ),
+                ToolParameter(
+                    name="timeout",
+                    type="number",
+                    description="Timeout in seconds",
+                    required=False,
+                    default=30,
                 ),
             ],
             handler=_shell_exec,
@@ -444,8 +478,11 @@ def register_builtin_tools() -> None:
             parameters=[
                 ToolParameter(name="url", type="string", description="URL to post to"),
                 ToolParameter(
-                    name="data", type="string", description="Request body",
-                    required=False, default="",
+                    name="data",
+                    type="string",
+                    description="Request body",
+                    required=False,
+                    default="",
                 ),
             ],
             handler=_http_post,
@@ -456,8 +493,11 @@ def register_builtin_tools() -> None:
             parameters=[
                 ToolParameter(name="query", type="string", description="Search query"),
                 ToolParameter(
-                    name="num_results", type="number", description="Number of results (default 5)",
-                    required=False, default=5,
+                    name="num_results",
+                    type="number",
+                    description="Number of results (default 5)",
+                    required=False,
+                    default=5,
                 ),
             ],
             handler=_web_search,
@@ -467,8 +507,11 @@ def register_builtin_tools() -> None:
             description="List files and directories with sizes. Defaults to current directory.",
             parameters=[
                 ToolParameter(
-                    name="path", type="string", description="Directory path (default: '.')",
-                    required=False, default=".",
+                    name="path",
+                    type="string",
+                    description="Directory path (default: '.')",
+                    required=False,
+                    default=".",
                 ),
             ],
             handler=_list_directory,
@@ -478,12 +521,18 @@ def register_builtin_tools() -> None:
             description="Show directory tree structure (non-hidden files, configurable depth)",
             parameters=[
                 ToolParameter(
-                    name="directory", type="string", description="Root directory (default: '.')",
-                    required=False, default=".",
+                    name="directory",
+                    type="string",
+                    description="Root directory (default: '.')",
+                    required=False,
+                    default=".",
                 ),
                 ToolParameter(
-                    name="max_depth", type="number", description="Max depth (default: 3)",
-                    required=False, default=3,
+                    name="max_depth",
+                    type="number",
+                    description="Max depth (default: 3)",
+                    required=False,
+                    default=3,
                 ),
             ],
             handler=_tree,
@@ -510,7 +559,9 @@ def register_builtin_tools() -> None:
             name="delete_file",
             description="Delete a file or empty directory (non-recursive for safety)",
             parameters=[
-                ToolParameter(name="path", type="string", description="File or directory to delete"),
+                ToolParameter(
+                    name="path", type="string", description="File or directory to delete"
+                ),
             ],
             handler=_delete_file,
         ),

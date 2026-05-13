@@ -34,7 +34,7 @@ class MCPClient:
 
     def __init__(self, config: MCPServerConfig) -> None:
         self.config = config
-        self._process: subprocess.Popen | None = None
+        self._process: asyncio.subprocess.Process | None = None
         self._server_tools: list[dict] = []
 
     async def initialize(self) -> list[dict]:
@@ -54,9 +54,12 @@ class MCPClient:
     async def _init_stdio(self) -> list[dict]:
         """Connect via stdio transport."""
         env = {**self.config.env} if self.config.env else None
+        cmd = self.config.command
+        if not cmd:
+            return []
 
         self._process = await asyncio.create_subprocess_exec(
-            self.config.command,
+            cmd,
             *self.config.args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -66,35 +69,41 @@ class MCPClient:
 
         try:
             # Send initialize request
-            await self._send_json({
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-03-26",
-                    "capabilities": {},
-                    "clientInfo": {"name": "weather-agents", "version": "0.1.0"},
-                },
-                "id": 1,
-            })
+            await self._send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "weather-agents", "version": "0.1.0"},
+                    },
+                    "id": 1,
+                }
+            )
 
             init_response = await self._read_response()
             if not init_response or "error" in init_response:
                 return []
 
             # Send initialized notification
-            await self._send_json({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {},
-            })
+            await self._send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {},
+                }
+            )
 
             # List tools
-            await self._send_json({
-                "jsonrpc": "2.0",
-                "method": "tools/list",
-                "params": {},
-                "id": 2,
-            })
+            await self._send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": {},
+                    "id": 2,
+                }
+            )
 
             tools_response = await self._read_response()
             if tools_response and "result" in tools_response:
@@ -107,7 +116,7 @@ class MCPClient:
 
     async def _init_sse(self) -> list[dict]:
         """Connect via SSE transport."""
-        url = self.config.url.rstrip("/")
+        url = (self.config.url or "").rstrip("/")
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -143,12 +152,14 @@ class MCPClient:
         return f"Error: No transport configured for MCP server '{self.config.name}'"
 
     async def _call_stdio(self, name: str, arguments: dict[str, Any]) -> str:
-        await self._send_json({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {"name": name, "arguments": arguments},
-            "id": 3,
-        })
+        await self._send_json(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+                "id": 3,
+            }
+        )
         response = await self._read_response()
         if response and "result" in response:
             result = response["result"]
@@ -163,7 +174,7 @@ class MCPClient:
         return f"MCP tool error: {error.get('message', 'unknown')}"
 
     async def _call_sse(self, name: str, arguments: dict[str, Any]) -> str:
-        url = self.config.url.rstrip("/")
+        url = (self.config.url or "").rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
@@ -188,7 +199,7 @@ class MCPClient:
         self._process.stdin.write(line.encode())
         await self._process.stdin.drain()
 
-    async def _read_response(self, timeout: float = 10.0) -> dict | None:
+    async def _read_response(self, timeout: float = 10.0) -> dict[str, Any] | None:
         if not self._process or not self._process.stdout:
             return None
         try:
@@ -197,18 +208,20 @@ class MCPClient:
                 timeout=timeout,
             )
             if line:
-                return json.loads(line.decode())
-        except (asyncio.TimeoutError, json.JSONDecodeError, ValueError):
+                data: dict[str, Any] = json.loads(line.decode())
+                return data
+        except (TimeoutError, json.JSONDecodeError, ValueError):
             pass
         return None
 
     async def close(self) -> None:
-        if self._process:
-            self._process.terminate()
+        proc = self._process
+        if proc:
+            proc.terminate()
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self._process.kill()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except TimeoutError:
+                proc.kill()
             self._process = None
 
     def get_tool_definitions(self) -> list[dict]:
@@ -278,12 +291,14 @@ class MCPManager:
 
             for param_name, param_schema in props.items():
                 param_type = param_schema.get("type", "string")
-                parameters.append(ToolParameter(
-                    name=param_name,
-                    type=param_type,
-                    description=param_schema.get("description", ""),
-                    required=param_name in required,
-                ))
+                parameters.append(
+                    ToolParameter(
+                        name=param_name,
+                        type=param_type,
+                        description=param_schema.get("description", ""),
+                        required=param_name in required,
+                    )
+                )
 
             mcp_tool_name = f"mcp_{server_name}_{name}"
 
@@ -300,11 +315,13 @@ class MCPManager:
 
     def _make_mcp_handler(self, server_name: str, tool_name: str):
         """Create a handler function that calls the MCP tool."""
+
         async def handler(**kwargs) -> str:
             client = self.clients.get(server_name)
             if not client:
                 return f"Error: MCP server '{server_name}' not connected."
             return await client.call_tool(tool_name, kwargs)
+
         return handler
 
     async def close_all(self) -> None:

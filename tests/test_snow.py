@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 
 
-
 class TestSnowParseTaskPlan:
     """Test the JSON parsing logic in SnowAgent._parse_task_plan."""
 
     @pytest.mark.asyncio
     async def test_parse_simple_json(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.snow import SnowAgent
+
         agent = SnowAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
 
         content = """{
@@ -32,6 +32,7 @@ class TestSnowParseTaskPlan:
     @pytest.mark.asyncio
     async def test_parse_invalid_json_fallback(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.snow import SnowAgent
+
         agent = SnowAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
 
         content = "I don't know how to do this, here's some text without JSON"
@@ -43,6 +44,7 @@ class TestSnowParseTaskPlan:
     @pytest.mark.asyncio
     async def test_parse_empty_steps_fallback(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.snow import SnowAgent
+
         agent = SnowAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
 
         content = '{"goal": "x", "steps": []}'
@@ -52,6 +54,7 @@ class TestSnowParseTaskPlan:
     @pytest.mark.asyncio
     async def test_parse_without_depends(self, app_config, mock_llm, bus, tool_registry):
         from weather_agents.agents.snow import SnowAgent
+
         agent = SnowAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
 
         content = '{"steps": [{"id": "1", "agent": "dew"}]}'

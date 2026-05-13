@@ -9,12 +9,13 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from weather_agents.agents.fog import FogAgent
-from weather_agents.agents.rain import RainAgent
-from weather_agents.agents.frost import FrostAgent
-from weather_agents.agents.snow import SnowAgent
 from weather_agents.agents.dew import DewAgent
-from weather_agents.core.agent import BaseAgent, Task as AgentTask
+from weather_agents.agents.fog import FogAgent
+from weather_agents.agents.frost import FrostAgent
+from weather_agents.agents.rain import RainAgent
+from weather_agents.agents.snow import SnowAgent
+from weather_agents.core.agent import BaseAgent
+from weather_agents.core.agent import Task as AgentTask
 from weather_agents.core.bus import MessageBus
 from weather_agents.core.config import AppConfig, load_config
 from weather_agents.core.llm import LLMClient
@@ -74,7 +75,9 @@ def create_system_context() -> SystemContext:
     llm = LLMClient(config, global_registry)
     agents = {
         name: cls(
-            config=config, llm=llm, bus=bus,
+            config=config,
+            llm=llm,
+            bus=bus,
             tool_registry=global_registry,
             skill_registry=global_skill_registry,
         )
@@ -109,7 +112,7 @@ async def orchestrate_task(
     if snow is None:
         return [], [], "Snow agent not available"
 
-    tasks = await snow.orchestrate(goal)
+    tasks = await snow.orchestrate(goal)  # type: ignore[attr-defined]
 
     # Build dependency graph and execute in topological order
     completed: set[str] = set()
@@ -118,10 +121,7 @@ async def orchestrate_task(
 
     while pending:
         # Find tasks whose dependencies are satisfied
-        ready = [
-            t for t in pending
-            if not t.parent_id or t.parent_id in completed
-        ]
+        ready = [t for t in pending if not t.parent_id or t.parent_id in completed]
         if not ready:
             ready = pending[:1]  # break deadlock
 
@@ -130,18 +130,24 @@ async def orchestrate_task(
             agent = agent_map.get(t.assigned_to)
             if not agent:
                 return TaskExecutionResult(
-                    id=t.id, agent=t.assigned_to or "",
-                    description=t.description, success=False,
+                    id=t.id,
+                    agent=t.assigned_to or "",
+                    description=t.description,
+                    success=False,
                     content=f"Agent '{t.assigned_to}' not found",
                 )
             a_task = AgentTask(
-                id=t.id, description=t.description,
-                assigned_to=t.assigned_to, metadata=t.metadata,
+                id=t.id,
+                description=t.description,
+                assigned_to=t.assigned_to,
+                metadata=t.metadata,
             )
             result = await agent.execute_task(a_task)
             return TaskExecutionResult(
-                id=t.id, agent=t.assigned_to or "",
-                description=t.description, success=result.success,
+                id=t.id,
+                agent=t.assigned_to or "",
+                description=t.description,
+                success=result.success,
                 content=result.content[:500],
             )
 

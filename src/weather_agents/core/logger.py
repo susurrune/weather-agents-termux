@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +35,7 @@ class StructuredFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         obj: dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "level": record.levelname.lower(),
             "logger": record.name,
             "msg": record.getMessage(),
@@ -113,7 +113,13 @@ def log_event(logger: logging.Logger, event_type: str, **fields: Any) -> None:
     Usage: log_event(log, "tool_call", tool="read_file", duration_ms=42)
     """
     record = logger.makeRecord(
-        logger.name, logging.INFO, "(unknown)", 0, event_type, (), None,
+        logger.name,
+        logging.INFO,
+        "(unknown)",
+        0,
+        event_type,
+        (),
+        None,
     )
     record.extra_fields = fields  # type: ignore[attr-defined]
     logger.handle(record)

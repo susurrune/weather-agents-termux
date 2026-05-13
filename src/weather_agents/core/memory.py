@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,21 +57,15 @@ class Memory:
             """
         )
         # Migrate existing DBs that lack the category/updated_at columns
-        try:
+        with contextlib.suppress(Exception):
             await self._db.execute(
                 "ALTER TABLE memories ADD COLUMN category TEXT DEFAULT 'general'"
             )
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             await self._db.execute(
                 "ALTER TABLE memories ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
             )
-        except Exception:
-            pass
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_agent_key ON memories(agent, key)"
-        )
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_agent_key ON memories(agent, key)")
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_category ON memories(agent, category)"
         )
@@ -102,7 +97,7 @@ class Memory:
             (self.agent_name, self.config.short_term_limit),
         )
         rows = await cursor.fetchall()
-        for row in reversed(rows):
+        for row in reversed(list(rows)):
             self.short_term.append(
                 Message(role=row[0], content=row[1], name=row[2], tool_call_id=row[3])
             )
@@ -113,10 +108,8 @@ class Memory:
             await asyncio.gather(*self._pending_persists, return_exceptions=True)
             self._pending_persists.clear()
         if self._db:
-            try:
+            with contextlib.suppress(Exception):
                 await self._db.commit()
-            except Exception:
-                pass
 
     async def close(self) -> None:
         if self._db:
@@ -147,7 +140,11 @@ class Memory:
             task.add_done_callback(self._pending_persists.discard)
 
     async def _persist_message(
-        self, role: str, content: str, name: str | None, tool_call_id: str | None,
+        self,
+        role: str,
+        content: str,
+        name: str | None,
+        tool_call_id: str | None,
     ) -> None:
         if not self._db:
             return
@@ -250,10 +247,7 @@ class Memory:
 
         cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
-        return [
-            {"key": r[0], "value": json.loads(r[1]), "category": r[2]}
-            for r in rows
-        ]
+        return [{"key": r[0], "value": json.loads(r[1]), "category": r[2]} for r in rows]
 
     async def forget(self, key: str) -> None:
         if not self._db:

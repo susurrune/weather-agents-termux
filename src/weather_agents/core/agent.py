@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from abc import ABC
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import AsyncIterator, Callable
+from enum import StrEnum
 
 from weather_agents.core.bus import Event, EventType, MessageBus
 from weather_agents.core.config import AppConfig
@@ -16,7 +15,7 @@ from weather_agents.core.skill import Skill, SkillRegistry
 from weather_agents.core.tool import Tool, ToolRegistry
 
 
-class AgentState(str, Enum):
+class AgentState(StrEnum):
     IDLE = "idle"
     THINKING = "thinking"
     ACTING = "acting"
@@ -42,7 +41,7 @@ class TaskResult:
     data: dict = field(default_factory=dict)
 
 
-class BaseAgent(ABC):
+class BaseAgent:
     """Base class for all Weather Agents."""
 
     name: str = ""
@@ -79,17 +78,14 @@ class BaseAgent(ABC):
         self._base_system_prompt = self.system_prompt
         self.memory.add_message("system", self.system_prompt)
         self._tools = (
-            self.tool_registry.get_tools(self.tool_names)
-            or self.tool_registry.get_tools()
+            self.tool_registry.get_tools(self.tool_names) or self.tool_registry.get_tools()
         )
         self._load_skills()
         self.bus.subscribe(self.name, self._handle_event)
 
     def _load_skills(self) -> None:
         """Load pre-installed skills and merge their tool requirements."""
-        self._skills = (
-            self.skill_registry.get_skills(self.skill_names) if self.skill_names else []
-        )
+        self._skills = self.skill_registry.get_skills(self.skill_names) if self.skill_names else []
         for skill in self._skills:
             for tool_name in skill.required_tools:
                 tool = self.tool_registry.get(tool_name)
@@ -131,7 +127,7 @@ class BaseAgent(ABC):
             if skill_prompts:
                 prompt += "\n\n" + "\n\n".join(skill_prompts)
 
-        for i, msg in enumerate(self.memory.short_term):
+        for _i, msg in enumerate(self.memory.short_term):
             if msg.role == "system":
                 msg.content = prompt
                 break
@@ -171,16 +167,18 @@ class BaseAgent(ABC):
         if event.type == EventType.TASK_ASSIGNED and event.target == self.name:
             task = Task(**event.data)
             result = await self.execute_task(task)
-            await self.bus.publish(Event(
-                type=EventType.TASK_COMPLETED,
-                source=self.name,
-                target=event.source,
-                data={
-                    "task_id": task.id,
-                    "success": result.success,
-                    "content": result.content,
-                },
-            ))
+            await self.bus.publish(
+                Event(
+                    type=EventType.TASK_COMPLETED,
+                    source=self.name,
+                    target=event.source,
+                    data={
+                        "task_id": task.id,
+                        "success": result.success,
+                        "content": result.content,
+                    },
+                )
+            )
 
     async def chat(
         self,
@@ -250,15 +248,18 @@ class BaseAgent(ABC):
             if not response.tool_calls:
                 return response
 
-            self.bus.add_event(Event(
-                type=EventType.LLM_CALL,
-                source=self.name,
-                data={"model": response.model, "usage": response.usage},
-            ))
+            self.bus.add_event(
+                Event(
+                    type=EventType.LLM_CALL,
+                    source=self.name,
+                    data={"model": response.model, "usage": response.usage},
+                )
+            )
 
             # Record assistant message with tool_calls
             self.memory.add_message(
-                "assistant", response.content or "",
+                "assistant",
+                response.content or "",
                 tool_calls=response.tool_calls,
             )
 
@@ -266,11 +267,13 @@ class BaseAgent(ABC):
                 tool = self.tool_registry.get(tc["name"])
                 tool_label = _tool_status_label(tc["name"], tc["arguments"])
 
-                self.bus.add_event(Event(
-                    type=EventType.TOOL_CALL,
-                    source=self.name,
-                    data={"tool": tc["name"], "args": tc["arguments"]},
-                ))
+                self.bus.add_event(
+                    Event(
+                        type=EventType.TOOL_CALL,
+                        source=self.name,
+                        data={"tool": tc["name"], "args": tc["arguments"]},
+                    )
+                )
 
                 if on_status:
                     on_status(tool_label)
@@ -279,13 +282,15 @@ class BaseAgent(ABC):
                     await self._set_state(AgentState.ACTING)
                     result = await tool.execute(**tc["arguments"])
                     self.memory.add_message(
-                        "tool", result,
+                        "tool",
+                        result,
                         name=tc["name"],
                         tool_call_id=tc["id"],
                     )
                 else:
                     self.memory.add_message(
-                        "tool", f"Tool '{tc['name']}' not found",
+                        "tool",
+                        f"Tool '{tc['name']}' not found",
                         name=tc["name"],
                         tool_call_id=tc["id"],
                     )
@@ -327,12 +332,14 @@ class BaseAgent(ABC):
 
     async def request_help(self, target_agent: str, description: str) -> None:
         """Request another agent's assistance."""
-        await self.bus.publish(Event(
-            type=EventType.AGENT_REQUEST,
-            source=self.name,
-            target=target_agent,
-            data={"description": description},
-        ))
+        await self.bus.publish(
+            Event(
+                type=EventType.AGENT_REQUEST,
+                source=self.name,
+                target=target_agent,
+                data={"description": description},
+            )
+        )
 
     def get_status(self) -> dict:
         usage = self.llm.get_usage_stats().get(self.name, {})

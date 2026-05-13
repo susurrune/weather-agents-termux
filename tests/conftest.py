@@ -18,24 +18,28 @@ def bus():
 @pytest.fixture
 def tool_registry():
     r = ToolRegistry()
-    r.register(Tool(
-        name="test_tool",
-        description="A test tool",
-        parameters=[],
-        handler=AsyncMock(return_value="tool result"),
-    ))
+    r.register(
+        Tool(
+            name="test_tool",
+            description="A test tool",
+            parameters=[],
+            handler=AsyncMock(return_value="tool result"),
+        )
+    )
     return r
 
 
 @pytest.fixture
 def mock_llm():
     llm = Mock()
-    llm.complete = AsyncMock(return_value=Mock(
-        content="test response",
-        tool_calls=[],
-        model="gpt-4o-mini",
-        usage={"prompt_tokens": 10, "completion_tokens": 5},
-    ))
+    llm.complete = AsyncMock(
+        return_value=Mock(
+            content="test response",
+            tool_calls=[],
+            model="gpt-4o-mini",
+            usage={"prompt_tokens": 10, "completion_tokens": 5},
+        )
+    )
     llm.stream = AsyncMock()
     llm.get_usage_stats = Mock(return_value={})
     llm.get_total_cost = Mock(return_value=0.0)
@@ -45,6 +49,7 @@ def mock_llm():
 @pytest.fixture
 def app_config():
     from weather_agents.core.config import AppConfig
+
     return AppConfig()
 
 
@@ -56,6 +61,7 @@ def temp_config_dir(tmp_path):
     with patch("weather_agents.core.config.USER_CONFIG_DIR", user_cfg):
         # Also invalidate cache to pick up new dir
         from weather_agents.core.config import invalidate_cache
+
         invalidate_cache()
         yield user_cfg
         invalidate_cache()
