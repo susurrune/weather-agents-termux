@@ -6,7 +6,7 @@
 
 *五位气象 Agent 各司其职，通过技能系统与事件总线协作，完成任何复杂任务。*
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/susurrune/weather-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/susurrune/weather-agents/actions)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/susurrune/weather-agents)
@@ -293,7 +293,7 @@ ruff format src/ tests/
 
 | Component | Technology |
 |:----------|:-----------|
-| Runtime | Python 3.12+ · asyncio |
+| Runtime | Python 3.11+ · asyncio |
 | LLM | LiteLLM (OpenAI / Anthropic / DeepSeek / Ollama) |
 | Web | FastAPI · WebSocket · Uvicorn |
 | CLI | Typer · Rich |
