@@ -284,13 +284,17 @@ class BaseAgent:
         """
         await self._set_state(AgentState.THINKING)
         self.memory.add_message("user", message)
+        assistant_stored = False
 
         try:
+            full_content = ""
             for _iteration in range(self._max_tool_rounds):
                 messages = self.memory.get_messages()
                 tool_names = self._active_tool_names()
 
                 tool_calls_received: list[dict] = []
+                streaming_reasoning: str | None = None
+                round_content = ""
                 async for event in self.llm.stream_with_tools(
                     messages=messages,
                     agent_name=self.name,
@@ -298,15 +302,27 @@ class BaseAgent:
                     tool_registry=self.tool_registry if tool_names else None,
                 ):
                     if event.type == "content":
+                        full_content += event.text
+                        round_content += event.text
                         yield {"type": "content", "text": event.text}
                     elif event.type == "tool_call" and event.tool_call:
                         tool_calls_received.append(event.tool_call)
                     elif event.type == "error":
                         yield {"type": "content", "text": f"\n[Error: {event.text}]"}
                         await self._set_state(AgentState.ERROR)
+                        if not assistant_stored:
+                            self._pop_last_user_message()
                         return
+                    elif event.type == "done":
+                        streaming_reasoning = event.reasoning_content
 
                 if not tool_calls_received:
+                    self.memory.add_message(
+                        "assistant",
+                        round_content,
+                        reasoning_content=streaming_reasoning,
+                    )
+                    assistant_stored = True
                     await self._set_state(AgentState.IDLE)
                     yield {"type": "done"}
                     return
@@ -314,9 +330,11 @@ class BaseAgent:
                 # Record assistant message with tool calls
                 self.memory.add_message(
                     "assistant",
-                    "",
+                    round_content,
                     tool_calls=tool_calls_received,
+                    reasoning_content=streaming_reasoning,
                 )
+                assistant_stored = True
 
                 for tc in tool_calls_received:
                     tool_name = tc["function"]["name"]
@@ -344,17 +362,30 @@ class BaseAgent:
                             name=tool_name,
                             tool_call_id=tc["id"],
                         )
+                        yield {"type": "tool_done", "label": tool_label, "success": False}
                     else:
                         tool = self.tool_registry.get(tool_name)
                         if tool:
                             await self._set_state(AgentState.ACTING)
-                            result = await tool.execute(**tool_args)
+                            try:
+                                result = await tool.execute(**tool_args)
+                            except Exception:
+                                result = f"Tool '{tool_name}' execution failed"
+                                self.memory.add_message(
+                                    "tool",
+                                    result,
+                                    name=tool_name,
+                                    tool_call_id=tc["id"],
+                                )
+                                yield {"type": "tool_done", "label": tool_label, "success": False}
+                                continue
                             self.memory.add_message(
                                 "tool",
                                 result,
                                 name=tool_name,
                                 tool_call_id=tc["id"],
                             )
+                            yield {"type": "tool_done", "label": tool_label, "success": True}
                         else:
                             self.memory.add_message(
                                 "tool",
@@ -362,12 +393,29 @@ class BaseAgent:
                                 name=tool_name,
                                 tool_call_id=tc["id"],
                             )
+                            yield {"type": "tool_done", "label": tool_label, "success": False}
             # Max iterations reached
+            if not assistant_stored:
+                self._pop_last_user_message()
+            await self._set_state(AgentState.IDLE)
             yield {"type": "done"}
 
         except Exception as e:
+            if not assistant_stored:
+                self._pop_last_user_message()
             await self._set_state(AgentState.ERROR)
             yield {"type": "content", "text": f"\n[Error: {e}]"}
+
+    def _pop_last_user_message(self) -> None:
+        """Remove the most recent user message from short-term memory.
+
+        Used to clean up after an error so the conversation history doesn't
+        contain a dangling user message with no assistant response.
+        """
+        for i in range(len(self.memory.short_term) - 1, -1, -1):
+            if self.memory.short_term[i].role == "user":
+                self.memory.short_term.pop(i)
+                break
 
     def _active_tool_names(self) -> list[str]:
         """Tool names available to this agent (base + merged from active skills)."""

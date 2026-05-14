@@ -199,6 +199,7 @@ class StreamEvent:
     text: str = ""
     tool_call: dict | None = None
     usage: dict | None = None
+    reasoning_content: str | None = None
 
 
 class LLMClient:
@@ -566,6 +567,7 @@ class LLMClient:
             return
 
         full_content = ""
+        reasoning_content: str | None = None
         tool_call_acc: dict[int, dict[str, Any]] = {}
         start = time.monotonic()
 
@@ -576,6 +578,12 @@ class LLMClient:
                 if delta.content:
                     full_content += delta.content
                     yield StreamEvent(type="content", text=delta.content)
+
+                # Capture reasoning_content for providers that require it (DeepSeek thinking mode)
+                if getattr(delta, "reasoning_content", None):
+                    if reasoning_content is None:
+                        reasoning_content = ""
+                    reasoning_content += delta.reasoning_content
 
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:
@@ -636,4 +644,5 @@ class LLMClient:
         yield StreamEvent(
             type="done",
             usage={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+            reasoning_content=reasoning_content,
         )

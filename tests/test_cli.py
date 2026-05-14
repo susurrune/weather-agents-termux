@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -377,20 +377,27 @@ class TestStreamingChat:
                 ]
             )
 
-            with patch("weather_agents.cli.main._print_response") as mock_print:
+            with patch("weather_agents.cli.main.Live") as mock_live_cls:
+                mock_live = MagicMock()
+                mock_live_cls.return_value = mock_live
+
                 await _run_interactive("fog")
-                mock_print.assert_called_once()
-                _, content, *_ = mock_print.call_args[0]
-                assert "Hello" in content
+                mock_live.start.assert_called_once()
+                # Content updates via Live
+                update_calls = mock_live.update.call_args_list
+                assert len(update_calls) >= 2
 
     @pytest.mark.asyncio
     async def test_streaming_tool_status(self):
         with (
             patch("weather_agents.cli.main.create_system_context") as mock_create,
             patch("weather_agents.cli.main.console.input", side_effect=["do x", "/quit"]),
+            patch("weather_agents.cli.main.Live") as mock_live_cls,
         ):
             mock_ctx = _make_ctx()
             mock_create.return_value = mock_ctx
+            mock_live = MagicMock()
+            mock_live_cls.return_value = mock_live
 
             mock_ctx.agent_map["fog"].chat_stream = lambda _msg: _async_iter(
                 [
@@ -401,9 +408,11 @@ class TestStreamingChat:
                 ]
             )
 
-            with patch("weather_agents.cli.main._print_response") as mock_print:
-                await _run_interactive("fog")
-                mock_print.assert_called_once()
+            await _run_interactive("fog")
+            mock_live.start.assert_called_once()
+            # Tool status included in updates
+            update_calls = mock_live.update.call_args_list
+            assert len(update_calls) >= 3
 
     @pytest.mark.asyncio
     async def test_streaming_interrupted(self):

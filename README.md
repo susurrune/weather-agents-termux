@@ -43,10 +43,11 @@
 │        Tool Registry · 15 Built-in Tools · MCP Protocol      │
 ├──────────────────────────────────────────────────────────────┤
 │              Event Bus (pub/sub · orchestration)              │
-├────────────────────────────┬─────────────────────────────────┤
-│  LLM (LiteLLM multi-provider) │  Memory (SQLite · 3-layer)  │
-│  Config (YAML + ENV)          │  Plugins · Cache · Budget    │
-└────────────────────────────┴─────────────────────────────────┘
+├──────────┬───────────────────┬───────────────────────────────┤
+│ LLM      │ Memory            │ Workspace                     │
+│ LiteLLM  │ SQLite · 3-layer  │ Auto-detect · multi-drive     │
+│ Config   │ Plugins · Cache   │ Budget · Cost Control         │
+└──────────┴───────────────────┴───────────────────────────────┘
 ```
 
 ## Agents
@@ -156,6 +157,9 @@ wa task "设计并实现一个 URL 短链接服务"
 | `/history` | 查看事件日志 |
 | `/mcp` | MCP 服务器状态（含已连接工具数） |
 | `/version` | 版本信息 |
+| `/workspace` | 查看工作空间路径和磁盘信息 |
+| `/workspace set <path>` | 自定义工作空间路径 |
+| `/workspace auto` | 恢复自动检测工作空间 |
 | `/clear` | 清屏 |
 | `/quit` | 退出 |
 
@@ -281,6 +285,32 @@ def create_plugin() -> Plugin:
     return plugin
 ```
 
+### Smart Workspace
+
+首次启动时自动检测最佳磁盘位置创建 `workspace/` 目录，所有 Agent 生成内容统一存放：
+
+```
+workspace/
+├── files/       # 生成的文件和代码
+├── output/      # 任务输出和报告
+├── temp/        # 临时文件
+└── .workspace   # 工作空间标记
+```
+
+**自动选择规则**：跳过 C 盘（如果存在其他盘）→ 选择剩余空间最大的盘 → 创建 `workspace/`。
+
+```bash
+> /workspace              # 查看当前工作空间路径和磁盘信息
+> /workspace set D:\my    # 自定义工作空间路径
+> /workspace auto         # 恢复自动检测
+```
+
+也可以在配置中直接设置：
+
+```bash
+wa config set workspace.path /custom/path
+```
+
 ## Configuration
 
 配置按优先级从高到低合并：
@@ -317,8 +347,8 @@ memory:
 # 安装开发依赖
 pip install -e ".[dev]"
 
-# 测试（107 tests, 60%+ 覆盖率）
-pytest tests/ -v --cov=weather_agents
+# 测试（281 tests, 55%+ 覆盖率）
+pytest tests/ -v --cov=src/ --cov-fail-under=55
 
 # Lint
 ruff check src/ tests/

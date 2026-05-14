@@ -16,6 +16,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -67,7 +68,97 @@ def _global_options(
     _ = version  # Consumed by callback above.
 
 
-# -- Spinner + status chat -------------------------------------------------
+# -- Spinner + display helpers -----------------------------------------------
+
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_spin_idx = 0
+
+
+def _next_spin() -> str:
+    global _spin_idx
+    c = _SPINNER[_spin_idx % len(_SPINNER)]
+    _spin_idx += 1
+    return c
+
+
+def _build_stream_display(
+    agent,
+    status_text: str,
+    md_content: str,
+    activities: list[dict],
+) -> Table:
+    """Build the Live renderable: status bar + content + optional activity panel."""
+    color = AGENT_COLORS.get(agent.name, "white")
+    spin = _next_spin()
+    header = f"  {spin}  {agent.emoji}  [bold {color}]{agent.display_name}[/bold {color}]  [dim]{status_text or 'thinking...'}[/dim]"
+
+    if not activities:
+        tbl = Table(show_header=False, box=None, padding=0, expand=True)
+        tbl.add_column(ratio=1)
+        tbl.add_row(Text(header))
+        tbl.add_row(Text("─" * min(console.width, 100), style="dim"))
+        if md_content:
+            tbl.add_row(Markdown(md_content))
+        return tbl
+
+    # Two-column: left = content, right = activity log
+    tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+    tbl.add_column(ratio=7)
+    tbl.add_column(ratio=3)
+
+    inner = Table(show_header=False, box=None, padding=0)
+    inner.add_column(ratio=1)
+    inner.add_row(Text(header))
+    inner.add_row(Text("─" * 40, style="dim"))
+    if md_content:
+        inner.add_row(Markdown(md_content))
+
+    act = Table(show_header=False, box=None, padding=(0, 0), expand=True)
+    act.add_column(style="dim")
+    for a in activities[-12:]:
+        s = a["status"]
+        icon = (
+            "[green]✓[/green]"
+            if s == "done"
+            else "[red]✗[/red]"
+            if s == "error"
+            else "[yellow]●[/yellow]"
+        )
+        act.add_row(f"{icon}  [dim]{a['label']}[/dim]")
+    if not [a for a in activities if a["status"] not in ("done", "error")]:
+        act.add_row("")
+        act.add_row("[dim]  — idle —[/dim]")
+
+    right = Panel(act, title="Activity", border_style="dim", padding=(0, 1))
+
+    tbl.add_row(inner, right)
+    return tbl
+
+
+def _build_response_panel(
+    agent,
+    content: str,
+    elapsed: float,
+    interrupted: bool = False,
+) -> Panel:
+    """Build a Panel for the final agent response."""
+    color = AGENT_COLORS.get(agent.name, "white")
+    title = f"{agent.emoji}  {agent.display_name}"
+    subtitle = f"{elapsed:.1f}s"
+    if interrupted:
+        subtitle += " (interrupted)"
+    return Panel(
+        Markdown(content),
+        title=title,
+        title_align="left",
+        subtitle=subtitle,
+        subtitle_align="right",
+        border_style=color,
+        padding=(1, 2),
+    )
+
+
+# -- Chat -------------------------------------------------------------------
 
 
 async def _chat_single(agent_name: str, message: str) -> None:
@@ -93,7 +184,7 @@ async def _chat_single(agent_name: str, message: str) -> None:
         finally:
             status_handle.stop()
         elapsed = time.monotonic() - t0
-        _print_response(agent, resp, elapsed)
+        console.print(_build_response_panel(agent, resp, elapsed))
     finally:
         await ctx.close_all()
 
@@ -113,12 +204,15 @@ async def _interactive(agent_name: str | None = None) -> None:
 
         while True:
             console.print()
+            # Separator before input
+            console.print(Text("  " + "─" * min(console.width - 2, 98), style="dim"))
             try:
                 color = AGENT_COLORS.get(agent.name, "cyan")
                 prompt = Text()
+                prompt.append("  ")
                 prompt.append(f"{agent.emoji} ", style=f"bold {color}")
                 prompt.append(f"{agent.display_name}", style=f"bold {color}")
-                prompt.append(" > ", style="dim")
+                prompt.append(" ▸ ", style=f"bold {color}")
                 inp = console.input(prompt)
             except (EOFError, KeyboardInterrupt):
                 console.print()
@@ -227,14 +321,15 @@ async def _interactive(agent_name: str | None = None) -> None:
             # --- Streaming chat with tool-call support ---
             t0 = time.monotonic()
             console.print()
-            color = AGENT_COLORS.get(agent.name, "white")
             interrupted = False
             md_content = ""
+            status_text = ""
+            activities: list[dict] = []
 
             live = Live(
-                Text("", style="dim"),
+                _build_stream_display(agent, "", "", activities),
                 console=console,
-                refresh_per_second=10,
+                refresh_per_second=12,
                 transient=False,
             )
             live.start()
@@ -243,19 +338,35 @@ async def _interactive(agent_name: str | None = None) -> None:
                 async for event in agent.chat_stream(inp):
                     if event["type"] == "content":
                         md_content += event["text"]
-                        live.update(Markdown(md_content))
-                    elif event["type"] == "tool_status":
                         live.update(
-                            Markdown(f"{md_content}\n\n*{agent.emoji} {event['label']}...*")
+                            _build_stream_display(agent, status_text, md_content, activities)
+                        )
+                    elif event["type"] == "tool_status":
+                        status_text = event["label"]
+                        activities.append({"label": event["label"], "status": "running"})
+                        live.update(
+                            _build_stream_display(agent, status_text, md_content, activities)
+                        )
+                    elif event["type"] == "tool_done":
+                        status_text = ""
+                        for a in activities:
+                            if a["label"] == event["label"] and a["status"] == "running":
+                                a["status"] = "done" if event.get("success") else "error"
+                                break
+                        live.update(
+                            _build_stream_display(agent, status_text, md_content, activities)
                         )
                     elif event["type"] == "done":
                         break
             except KeyboardInterrupt:
                 interrupted = True
             finally:
+                # Replace stream display with final response panel
+                if md_content.strip():
+                    live.update(
+                        _build_response_panel(agent, md_content, time.monotonic() - t0, interrupted)
+                    )
                 live.stop()
-
-            elapsed = time.monotonic() - t0
 
             if not md_content.strip():
                 if interrupted:
@@ -264,40 +375,11 @@ async def _interactive(agent_name: str | None = None) -> None:
                     console.print("  [red]no response[/red]")
                 continue
 
-            # Print final formatted response
-            _print_response(agent, md_content, elapsed, interrupted)
+            console.print()
 
     finally:
         console.print("\n  [dim]bye[/dim]")
         await ctx.close_all()
-
-
-def _print_response(
-    agent,
-    content: str,
-    elapsed: float,
-    interrupted: bool = False,
-) -> None:
-    """Print a finalized response with color-coded agent header and footer."""
-    color = AGENT_COLORS.get(agent.name, "white")
-
-    # ── Header ──
-    header = Text()
-    header.append(f"  {agent.emoji} ", style=f"bold {color}")
-    header.append(agent.display_name, style=f"bold {color}")
-    console.print(header)
-
-    # ── Content ──
-    md = Markdown(content)
-    console.print(md, width=min(console.width, 100))
-
-    # ── Footer ──
-    footer = Text("  ")
-    footer.append(f"{elapsed:.1f}s", style="dim")
-    if interrupted:
-        footer.append("  (interrupted)", style="dim yellow")
-    console.print(footer)
-    console.print()
 
 
 # -- Welcome & Help --------------------------------------------------------
