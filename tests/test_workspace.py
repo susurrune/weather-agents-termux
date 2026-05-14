@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
+
+import pytest
 
 
 class TestWorkspaceDetection:
@@ -23,6 +26,7 @@ class TestWorkspaceDetection:
         assert root.is_absolute()
         assert root.name == "workspace"
 
+    @pytest.mark.skipif(os.name != "nt", reason="Windows drive detection")
     def test_detect_skips_c_drive_when_others_exist(self):
         from weather_agents.core.workspace import DriveInfo, detect_best_workspace_root
 
@@ -37,6 +41,7 @@ class TestWorkspaceDetection:
             root = detect_best_workspace_root()
             assert str(root).startswith("D:")
 
+    @pytest.mark.skipif(os.name != "nt", reason="Windows drive detection")
     def test_detect_falls_back_to_c_when_only_c(self):
         from weather_agents.core.workspace import DriveInfo, detect_best_workspace_root
 
@@ -50,6 +55,7 @@ class TestWorkspaceDetection:
             root = detect_best_workspace_root()
             assert str(root).startswith("C:")
 
+    @pytest.mark.skipif(os.name != "nt", reason="Windows drive detection")
     def test_detect_picks_most_free_space(self):
         from weather_agents.core.workspace import DriveInfo, detect_best_workspace_root
 

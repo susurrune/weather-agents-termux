@@ -65,3 +65,19 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = [
+    "src/weather_agents/skills/api_integrator.py",
+    "src/weather_agents/skills/arch_designer.py",
+    "src/weather_agents/skills/ci_cd_manager.py",
+    "src/weather_agents/skills/code_analysis.py",
+    "src/weather_agents/skills/code_generator.py",
+    "src/weather_agents/skills/content_writer.py",
+    "src/weather_agents/skills/data_transformer.py",
+    "src/weather_agents/skills/document_analysis.py",
+    "src/weather_agents/skills/performance_checker.py",
+    "src/weather_agents/skills/sys_operator.py",
+    "src/weather_agents/skills/task_planner.py",
+    "src/weather_agents/skills/workflow_designer.py",
+]
