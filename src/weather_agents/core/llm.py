@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -20,6 +21,89 @@ from weather_agents.core.logger import get_logger, log_event
 from weather_agents.core.tool import ToolRegistry
 
 log = get_logger("llm")
+
+# Silence LiteLLM's noisy stderr banners (the "Give Feedback / Get Help" lines
+# and verbose dump on every failure). Users on WA_DEBUG=1 can opt back in.
+if os.environ.get("WA_DEBUG") != "1":
+    litellm.suppress_debug_info = True
+    with contextlib.suppress(Exception):
+        litellm.set_verbose = False  # type: ignore[attr-defined]
+    # Tame LiteLLM's loggers as well.
+    import logging as _logging
+
+    for _name in ("LiteLLM", "litellm", "litellm.router", "litellm.proxy"):
+        _logging.getLogger(_name).setLevel(_logging.ERROR)
+
+
+# When the user gives a `<provider>/<model>` form, force LiteLLM to route by
+# the prefix even if `<model>` is not in its built-in registry. Without this,
+# unknown deepseek/anthropic IDs (e.g. preview models) fall through to the
+# default OpenAI client and surface "OPENAI_API_KEY missing" instead of
+# routing to the right provider.
+_KNOWN_PROVIDERS = {
+    "openai",
+    "azure",
+    "anthropic",
+    "deepseek",
+    "ollama",
+    "groq",
+    "mistral",
+    "cohere",
+    "together_ai",
+    "openrouter",
+    "gemini",
+    "vertex_ai",
+}
+
+
+def _split_provider(model: str) -> tuple[str | None, str]:
+    """Return (provider, stripped_model) if model looks like `<provider>/<name>`."""
+    if "/" not in model:
+        return None, model
+    head, tail = model.split("/", 1)
+    if head.lower() in _KNOWN_PROVIDERS:
+        return head.lower(), tail
+    return None, model
+
+
+_PROVIDER_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+def _format_user_facing_error(model: str, err: BaseException | None) -> str:
+    """Turn a low-level LiteLLM exception into a one-line, actionable message."""
+    text = str(err) if err else "unknown error"
+    provider, _ = _split_provider(model)
+
+    # AuthenticationError / missing API key is the #1 case after a fresh install.
+    lowered = text.lower()
+    if "api_key" in lowered or "authentication" in lowered or "unauthorized" in lowered:
+        env_var = _PROVIDER_ENV.get(provider or "", "the appropriate *_API_KEY")
+        return (
+            f"❌  {model} 调用失败：缺少或无效的 API key。\n"
+            f"请确认 `{env_var}` 已设置，或运行 `wa init` 重新配置。"
+        )
+    if "rate limit" in lowered or "429" in text:
+        return f"❌  {model} 速率受限，请稍后重试。"
+    if "timeout" in lowered:
+        return f"❌  {model} 请求超时，请稍后重试或调高 `wa config set timeout 180`。"
+    if "model" in lowered and ("not found" in lowered or "does not exist" in lowered):
+        return (
+            f"❌  {model} 不是该 provider 的有效模型 ID。\n"
+            f"运行 `wa config models` 查看可用模型，或 `wa init` 重新选择。"
+        )
+    # Generic fallback — short, no stack trace, no LiteLLM banner.
+    short = text.splitlines()[0][:200]
+    return f"❌  {model} 调用失败：{short}"
+
 
 # Cost per 1K tokens (input / output) — USD
 _MODEL_COST_ESTIMATES: dict[str, tuple[float, float]] = {
@@ -203,7 +287,7 @@ class LLMClient:
             },
         )
         return LLMResponse(
-            content=f"[{self._get_model(agent_name)}] API 调用失败: {last_error}",
+            content=_format_user_facing_error(self._get_model(agent_name), last_error),
             model=models_to_try[-1],
         )
 
@@ -233,6 +317,10 @@ class LLMClient:
         max_retries = self._get_retries()
         last_error: Exception | None = None
 
+        # Force provider routing when the model name carries a `<provider>/`
+        # prefix — fixes preview/unknown model IDs falling through to OpenAI.
+        provider, _stripped = _split_provider(model)
+
         for attempt in range(max_retries + 1):
             try:
                 kwargs: dict[str, Any] = {
@@ -242,6 +330,8 @@ class LLMClient:
                     "max_tokens": self.config.llm.max_tokens,
                     "timeout": self.config.llm.timeout,
                 }
+                if provider:
+                    kwargs["custom_llm_provider"] = provider
                 if tool_schemas:
                     kwargs["tools"] = tool_schemas
 
@@ -340,15 +430,19 @@ class LLMClient:
         self._check_budget()
         model = self._get_model(agent_name)
 
+        provider, _stripped = _split_provider(model)
         try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                temperature=self.config.llm.temperature,
-                max_tokens=self.config.llm.max_tokens,
-                timeout=self.config.llm.timeout,
-                stream=True,
-            )
+            stream_kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "temperature": self.config.llm.temperature,
+                "max_tokens": self.config.llm.max_tokens,
+                "timeout": self.config.llm.timeout,
+                "stream": True,
+            }
+            if provider:
+                stream_kwargs["custom_llm_provider"] = provider
+            response = await litellm.acompletion(**stream_kwargs)
 
             full_content = ""
             start = time.monotonic()

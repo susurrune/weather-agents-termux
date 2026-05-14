@@ -91,8 +91,48 @@ def setup_logging(
     _configured = True
 
 
+def _ensure_default_setup() -> None:
+    """Configure default file-only logging so warnings don't pollute the CLI UI.
+
+    Runs at most once. If WA_DEBUG=1 is set, also stream to stderr.
+    """
+    global _configured
+    if _configured:
+        return
+    root = logging.getLogger("wa")
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    root.propagate = False  # don't leak to Python's root logger -> stderr
+
+    # File handler — quiet by default. Best-effort: if file isn't writable,
+    # fall through to NullHandler so the CLI never crashes on logging.
+    log_path = Path.home() / ".weather-agents" / "wa.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = logging.FileHandler(str(log_path), encoding="utf-8")
+        fh.setFormatter(StructuredFormatter())
+        root.addHandler(fh)
+    except OSError:
+        root.addHandler(logging.NullHandler())
+
+    # Opt-in stderr stream for debugging.
+    import os as _os
+
+    if _os.environ.get("WA_DEBUG") == "1":
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setFormatter(
+            logging.Formatter(
+                "[%(asctime)s] %(levelname)-5s %(name)s — %(message)s", datefmt="%H:%M:%S"
+            )
+        )
+        root.addHandler(sh)
+
+    _configured = True
+
+
 def get_logger(name: str) -> logging.Logger:
     """Get a structured logger for the given component name."""
+    _ensure_default_setup()
     if name not in _loggers:
         logger = logging.getLogger(f"wa.{name}")
         _loggers[name] = logger
