@@ -84,7 +84,7 @@ class TestConfigCore:
 
         delete_config("default_model")
         cfg = load_config()
-        assert cfg.llm.default_model == "gpt-4o-mini"
+        assert cfg.llm.default_model == "deepseek/deepseek-v4-flash"
 
 
 class TestConfigValidation:

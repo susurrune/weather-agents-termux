@@ -265,7 +265,7 @@ def create_plugin() -> Plugin:
 
 ```yaml
 llm:
-  default_model: "gpt-4o-mini"
+  default_model: "deepseek/deepseek-v4-flash"
   temperature: 0.7
   max_tokens: 4096
   timeout: 60
@@ -276,9 +276,9 @@ llm:
 
 agents:
   fog:
-    model: "gpt-4o"       # 覆盖默认模型
+    model: "gpt-4o"               # 覆盖默认模型
   frost:
-    model: "claude-sonnet-4-20250514"
+    model: "claude-sonnet-4-6"
 
 memory:
   db_path: "~/.weather-agents/memory.db"

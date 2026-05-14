@@ -49,7 +49,7 @@ def format_models_for_display(catalog: dict[str, list[dict]]) -> str:
 
 @dataclass
 class LLMConfig:
-    default_model: str = "gpt-4o-mini"
+    default_model: str = "deepseek/deepseek-v4-flash"
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 120

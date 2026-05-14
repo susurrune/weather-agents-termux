@@ -33,6 +33,8 @@ _MODEL_COST_ESTIMATES: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (0.0008, 0.004),
     "deepseek-v4-flash": (0.00014, 0.00028),
     "deepseek-v4-pro": (0.00055, 0.0022),
+    "deepseek/deepseek-v4-flash": (0.00014, 0.00028),
+    "deepseek/deepseek-v4-pro": (0.00055, 0.0022),
     "ollama/llama3": (0.0, 0.0),
     "ollama/qwen2.5": (0.0, 0.0),
 }
@@ -47,6 +49,8 @@ _FALLBACK_CHAINS: dict[str, list[str]] = {
     "claude-haiku-4-5": ["gpt-4o-mini"],
     "deepseek-v4-flash": ["gpt-4o-mini"],
     "deepseek-v4-pro": ["deepseek-v4-flash", "gpt-4o-mini"],
+    "deepseek/deepseek-v4-flash": ["gpt-4o-mini"],
+    "deepseek/deepseek-v4-pro": ["deepseek/deepseek-v4-flash", "gpt-4o-mini"],
 }
 
 _RETRYABLE_STATUSES = {408, 425, 429, 500, 502, 503, 504}
