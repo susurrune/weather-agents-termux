@@ -63,9 +63,37 @@
 
 ### 1. Install
 
+**推荐：用 [`pipx`](https://pipx.pypa.io/) 全局安装**——它会为 `wa` 建一个独立 venv，但把命令放到 PATH 上，不与你任何其它项目冲突。
+
 ```bash
-pip install git+https://github.com/susurrune/weather-agents.git
+# 一条命令（自动安装 pipx 并装好 weather-agents 与全部依赖）
+python -m pip install --user pipx && python -m pipx install git+https://github.com/susurrune/weather-agents.git
 ```
+
+PowerShell 用 `;` 替代 `&&`：
+
+```powershell
+python -m pip install --user pipx; python -m pipx install git+https://github.com/susurrune/weather-agents.git
+```
+
+> 装完后 `wa` 会出现在 `~/.local/bin`（Linux/macOS）或 `%USERPROFILE%\.local\bin`（Windows）。如果命令不可用，运行 `pipx ensurepath` 然后重开终端。
+
+升级 / 卸载：
+
+```bash
+pipx upgrade weather-agents
+pipx uninstall weather-agents
+```
+
+<details>
+<summary>不想用 pipx？</summary>
+
+```bash
+pip install --user git+https://github.com/susurrune/weather-agents.git
+```
+
+注意：必须确保 `wa` 命令使用的 Python 和 `pip install` 用的 Python 是同一个，否则会出现 `ModuleNotFoundError: weather_agents`。
+</details>
 
 ### 2. Configure
 
