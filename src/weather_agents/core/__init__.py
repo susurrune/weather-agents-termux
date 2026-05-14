@@ -1,4 +1,12 @@
-"""Core framework for Weather Agents."""
+"""Core framework for Weather Agents.
+
+Re-exports leaf modules only. ``factory`` is intentionally NOT exposed here
+because it imports ``weather_agents.tools.builtin`` — which itself needs
+``weather_agents.core.tool``. Loading ``factory`` during ``core/__init__.py``
+would create a circular import when any third-party code imports directly
+from ``weather_agents.tools.builtin``. Import factory explicitly from
+``weather_agents.core.factory`` when you need it.
+"""
 
 from weather_agents.core.agent import AgentState, BaseAgent, Task, TaskResult
 from weather_agents.core.bus import Event, EventType, MessageBus
@@ -10,12 +18,6 @@ from weather_agents.core.config import (
     load_model_catalog,
     set_config,
 )
-from weather_agents.core.factory import (
-    AGENT_CLASSES,
-    AGENT_EMOJI,
-    SystemContext,
-    create_system_context,
-)
 from weather_agents.core.llm import LLMClient, LLMResponse
 from weather_agents.core.logger import LoggerMixin, get_logger, setup_logging
 from weather_agents.core.mcp import MCPClient, MCPManager, MCPServerConfig
@@ -24,36 +26,32 @@ from weather_agents.core.skill import Skill, SkillRegistry, global_skill_registr
 from weather_agents.core.tool import Tool, ToolParameter, ToolRegistry
 
 __all__ = [
-    "BaseAgent",
+    "AppConfig",
     "AgentState",
-    "Task",
-    "TaskResult",
-    "MessageBus",
+    "BaseAgent",
     "Event",
     "EventType",
-    "load_config",
-    "set_config",
-    "delete_config",
-    "load_model_catalog",
-    "AppConfig",
-    "create_system_context",
-    "SystemContext",
-    "AGENT_CLASSES",
-    "AGENT_EMOJI",
+    "LLMCache",
     "LLMClient",
     "LLMResponse",
-    "Memory",
-    "Skill",
-    "SkillRegistry",
-    "global_skill_registry",
-    "Tool",
-    "ToolRegistry",
-    "ToolParameter",
+    "LoggerMixin",
     "MCPClient",
     "MCPManager",
     "MCPServerConfig",
-    "LLMCache",
+    "Memory",
+    "MessageBus",
+    "Skill",
+    "SkillRegistry",
+    "Task",
+    "TaskResult",
+    "Tool",
+    "ToolParameter",
+    "ToolRegistry",
+    "delete_config",
     "get_logger",
+    "global_skill_registry",
+    "load_config",
+    "load_model_catalog",
+    "set_config",
     "setup_logging",
-    "LoggerMixin",
 ]
