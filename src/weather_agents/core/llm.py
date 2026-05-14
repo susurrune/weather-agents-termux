@@ -49,7 +49,30 @@ _FALLBACK_CHAINS: dict[str, list[str]] = {
     "deepseek-v4-pro": ["deepseek-v4-flash", "gpt-4o-mini"],
 }
 
-_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_RETRYABLE_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """Decide whether an exception is worth retrying.
+
+    Retries only on known-transient classes (timeouts, rate limits, 5xx) rather
+    than blindly retrying every error — which used to mask config bugs.
+    """
+    status = getattr(exc, "status_code", 0) or getattr(exc, "http_status", 0)
+    if status and status in _RETRYABLE_STATUSES:
+        return True
+    if isinstance(exc, asyncio.TimeoutError | TimeoutError | ConnectionError):
+        return True
+    # LiteLLM-specific transient classes (best-effort, names are stable)
+    name = type(exc).__name__
+    return name in {
+        "RateLimitError",
+        "APITimeoutError",
+        "APIConnectionError",
+        "ServiceUnavailableError",
+        "InternalServerError",
+        "Timeout",
+    }
 
 
 def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -147,6 +170,7 @@ class LLMClient:
         last_error: Exception | None = None
         for attempt_model in models_to_try:
             try:
+                self._check_budget()
                 return await self._complete_with_retry(
                     attempt_model,
                     messages,
@@ -189,9 +213,15 @@ class LLMClient:
     ) -> LLMResponse:
         tool_schemas = self.tool_registry.get_schemas(tools) if tools else None
 
+        # Cache key must include sampling params so different temperature/max_tokens
+        # don't collide on the same prompt.
+        cache_params = {
+            "temperature": self.config.llm.temperature,
+            "max_tokens": self.config.llm.max_tokens,
+        }
         use_cache = not tools and not stream
         if use_cache:
-            cached = self.cache.get(model, messages)
+            cached = self.cache.get(model, messages, cache_params)
             if cached is not None:
                 log_event(log, "cache_hit", model=model, agent=agent_name)
                 return LLMResponse(content=cached, model=model)
@@ -261,7 +291,7 @@ class LLMClient:
                 )
 
                 if use_cache and content and not tool_calls:
-                    self.cache.set(model, messages, content)
+                    self.cache.set(model, messages, content, cache_params)
 
                 return LLMResponse(
                     content=content,
@@ -280,14 +310,7 @@ class LLMClient:
 
             except Exception as e:
                 last_error = e
-                status = getattr(e, "status_code", 0) or getattr(
-                    e,
-                    "http_status",
-                    0,
-                )
-                is_retryable = status in _RETRYABLE_STATUSES or not status
-
-                if is_retryable and attempt < max_retries:
+                if _is_transient_error(e) and attempt < max_retries:
                     delay = min(2**attempt * 1.0, 10.0)
                     log.warning(
                         "llm_retry",
@@ -333,8 +356,19 @@ class LLMClient:
                         yield delta.content
 
             elapsed = time.monotonic() - start
-            prompt_tokens = max(1, len(str(messages)) // 4)
-            completion_tokens = max(1, len(full_content) // 4)
+            try:
+                prompt_tokens = int(litellm.token_counter(model=model, messages=messages))
+            except Exception:
+                prompt_tokens = max(1, len(str(messages)) // 4)
+            try:
+                completion_tokens = int(
+                    litellm.token_counter(
+                        model=model,
+                        messages=[{"role": "assistant", "content": full_content}],
+                    )
+                )
+            except Exception:
+                completion_tokens = max(1, len(full_content) // 4)
             self._track_usage(agent_name, model, prompt_tokens, completion_tokens)
             log_event(
                 log,

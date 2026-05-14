@@ -133,7 +133,12 @@ class Memory:
             self.short_term = system_msgs + other_msgs[-keep:]
 
         if self._db and role != "system":
-            task = asyncio.ensure_future(
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No event loop — skip persistence rather than crash sync callers.
+                return
+            task = loop.create_task(
                 self._persist_message(role, content, msg.name, msg.tool_call_id)
             )
             self._pending_persists.add(task)
@@ -155,8 +160,13 @@ class Memory:
                 (self.agent_name, role, content, name, tool_call_id),
             )
             await self._db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            from weather_agents.core.logger import get_logger
+
+            get_logger("memory").warning(
+                "persist_message_failed",
+                extra={"agent": self.agent_name, "error": str(e)},
+            )
 
     def get_messages(self) -> list[dict]:
         msgs = []

@@ -73,10 +73,16 @@ class BaseAgent:
         self._base_system_prompt: str = ""
 
     async def init(self) -> None:
-        """Initialize agent (memory, subscriptions, skills, etc)."""
+        """Initialize agent (memory, subscriptions, skills, etc). Idempotent."""
+        if self._base_system_prompt:
+            # Already initialized — don't double-register message bus subscription or
+            # re-append the system message.
+            return
         await self.memory.init_db()
         self._base_system_prompt = self.system_prompt
-        self.memory.add_message("system", self.system_prompt)
+        # Only inject system prompt if it isn't already at the head of short_term.
+        if not any(m.role == "system" for m in self.memory.short_term):
+            self.memory.add_message("system", self.system_prompt)
         self._tools = (
             self.tool_registry.get_tools(self.tool_names) or self.tool_registry.get_tools()
         )
@@ -227,6 +233,19 @@ class BaseAgent:
             await self._set_state(AgentState.ERROR)
             yield f"\n[Error: {e}]"
 
+    def _active_tool_names(self) -> list[str]:
+        """Tool names available to this agent (base + merged from active skills)."""
+        names = list(self.tool_names)
+        seen = set(names)
+        for skill in self._skills:
+            if skill.name not in self._active_skills:
+                continue
+            for tool_name in skill.required_tools:
+                if tool_name not in seen:
+                    names.append(tool_name)
+                    seen.add(tool_name)
+        return names
+
     async def _llm_loop(
         self,
         max_iterations: int = 10,
@@ -234,6 +253,7 @@ class BaseAgent:
     ) -> LLMResponse:
         """LLM reasoning loop with tool calling support."""
         response = LLMResponse(content="")
+        tool_names = self._active_tool_names()
 
         for _ in range(max_iterations):
             messages = self.memory.get_messages()
@@ -242,7 +262,7 @@ class BaseAgent:
             response = await self.llm.complete(
                 messages=messages,
                 agent_name=self.name,
-                tools=self.tool_names or None,
+                tools=tool_names or None,
             )
 
             if not response.tool_calls:

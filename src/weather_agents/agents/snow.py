@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 
@@ -109,90 +108,6 @@ class SnowAgent(BaseAgent):
                 )
 
         return tasks
-
-    async def orchestrate_with_results(
-        self,
-        goal: str,
-        agents: dict,
-        max_iterations: int = 3,
-    ) -> dict:
-        """Decompose, dispatch, execute, and collect results with retry on failure."""
-        all_tasks: list[Task] = []
-        all_results: dict[str, dict] = {}
-        context = goal
-        iteration = 0
-
-        for iteration in range(max_iterations):
-            if iteration > 0:
-                failed = [r for r in all_results.values() if not r["success"]]
-                if not failed:
-                    break
-                context = self._build_refinement_prompt(goal, failed)
-
-            tasks = await self.orchestrate(context)
-
-            if iteration == 0:
-                all_tasks = tasks
-            else:
-                all_tasks.extend(tasks)
-
-            pending = [t for t in tasks if t.assigned_to and t.assigned_to != self.name]
-            completed: set[str] = set()
-
-            async def _run(t: Task, _completed: set = completed) -> None:
-                agent = agents.get(t.assigned_to)
-                if not agent:
-                    return
-                result = await agent.execute_task(t)
-                all_results[t.id] = {
-                    "id": t.id,
-                    "agent": t.assigned_to,
-                    "description": t.description,
-                    "success": result.success,
-                    "content": result.content,
-                }
-                if result.success:
-                    _completed.add(t.id)
-
-            # Execute with dependency ordering
-            while pending:
-                batch = [t for t in pending if not t.parent_id or t.parent_id in completed]
-                if not batch:
-                    batch = pending[:1]
-                for t in batch:
-                    pending.remove(t)
-                await asyncio.gather(*[_run(t) for t in batch])
-
-        summary = await self._generate_summary(goal, all_results)
-        return {
-            "tasks": all_tasks,
-            "results": all_results,
-            "summary": summary,
-            "iterations": iteration + 1,
-        }
-
-    def _build_refinement_prompt(self, goal: str, failed: list[dict]) -> str:
-        parts = [f"原始目标: {goal}\n\n以下子任务执行失败，请重新规划：\n"]
-        for f in failed:
-            parts.append(f"- 任务 {f['id']} ({f['agent']}): {f['description']}")
-            parts.append(f"  错误: {f['content'][:200]}")
-        parts.append("\n请输出新的任务计划 JSON。")
-        return "\n".join(parts)
-
-    async def _generate_summary(self, goal: str, results: dict) -> str:
-        prompt = f"以下是任务「{goal}」的各子任务执行结果，请给出整体总结报告：\n\n"
-        for tid, r in results.items():
-            status = "✅ 成功" if r["success"] else "❌ 失败"
-            prompt += (
-                f"## 任务 {tid} ({r['agent']}) - {status}\n"
-                f"描述: {r['description']}\n"
-                f"结果:\n{r['content'][:500]}\n\n"
-            )
-
-        self.memory.add_message("user", prompt)
-        response = await self._llm_loop()
-        self.memory.add_message("assistant", response.content)
-        return response.content
 
     def _parse_task_plan(self, content: str, goal: str) -> list[Task]:
         """Extract task plan from LLM response with robust JSON parsing."""

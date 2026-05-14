@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import shlex
 import subprocess
@@ -11,15 +12,32 @@ import httpx
 
 from weather_agents.core.tool import Tool, ToolParameter, global_registry
 
+_MAX_FILE_BYTES = 50_000
+_MAX_SHELL_OUTPUT = 20_000
+_MAX_SEARCH_OUTPUT = 10_000
+
+
+def _truncate(text: str, limit: int, label: str = "output") -> str:
+    """Truncate text with a visible marker so the LLM knows there was more."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n\n[... truncated, total {len(text)} chars of {label}]"
+
+
 # -- File Tools --
 
 
 async def _read_file(path: str, **kwargs) -> str:
     try:
         with open(path, encoding="utf-8") as f:
-            return f.read()[:50000]
+            content = f.read()
+        return _truncate(content, _MAX_FILE_BYTES, "file")
     except FileNotFoundError:
         return f"Error: File not found: {path}"
+    except UnicodeDecodeError:
+        return f"Error: {path} is not a UTF-8 text file (binary?)"
+    except PermissionError:
+        return f"Error: Permission denied: {path}"
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -161,66 +179,107 @@ async def _get_cwd(**kwargs) -> str:
 
 
 async def _file_search(directory: str, pattern: str, **kwargs) -> str:
-    import glob
+    """Glob-search for files. Uses pathlib for cross-platform correctness."""
+    from pathlib import Path
 
-    matches = glob.glob(f"{directory}/**/{pattern}", recursive=True)
+    try:
+        root = Path(directory).expanduser().resolve()
+        if not root.is_dir():
+            return f"Error: not a directory: {directory}"
+        matches = [str(p) for p in root.rglob(pattern) if p.is_file()]
+    except OSError as e:
+        return f"Error searching: {e}"
     if not matches:
         return f"No files matching '{pattern}' found in {directory}"
-    return "\n".join(matches[:50])
+    truncated = len(matches) > 50
+    out = "\n".join(matches[:50])
+    if truncated:
+        out += f"\n\n[... {len(matches) - 50} more matches not shown]"
+    return out
 
 
-async def _code_search(directory: str, query: str, **kwargs) -> str:
+async def _code_search(
+    directory: str,
+    query: str,
+    regex: bool = False,
+    **kwargs,
+) -> str:
+    """Search for text or regex in source files. Set regex=True for regex mode."""
+    import re as _re
+    from pathlib import Path
+
+    suffixes = {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".toml",
+        ".md",
+        ".c",
+        ".cpp",
+        ".h",
+    }
+
     try:
-        result = subprocess.run(
-            [
-                "grep",
-                "-rn",
-                "--include=*.py",
-                "--include=*.ts",
-                "--include=*.js",
-                "--include=*.go",
-                "--include=*.rs",
-                "--include=*.java",
-                "--include=*.yaml",
-                "--include=*.json",
-                query,
-                directory,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        output = result.stdout[:10000] if result.stdout else "No matches found"
-        return output
-    except FileNotFoundError:
-        # grep not available, fall back to Python
-        matches = []
-        for root, _, files in os.walk(directory):
-            for f in files:
-                if not f.endswith((".py", ".ts", ".js", ".go", ".rs", ".java")):
-                    continue
-                fp = os.path.join(root, f)
-                try:
-                    with open(fp, encoding="utf-8", errors="ignore") as fh:
-                        for i, line in enumerate(fh, 1):
-                            if query in line:
-                                matches.append(f"{fp}:{i}:{line.rstrip()}")
-                                if len(matches) >= 50:
-                                    return "\n".join(matches)
-                except OSError:
-                    continue
-        return "\n".join(matches) if matches else "No matches found"
-    except Exception as e:
-        return f"Error searching: {e}"
+        root = Path(directory).expanduser().resolve()
+        if not root.is_dir():
+            return f"Error: not a directory: {directory}"
+    except OSError as e:
+        return f"Error: {e}"
+
+    matcher: object
+    if regex:
+        try:
+            matcher = _re.compile(query)
+        except _re.error as e:
+            return f"Error: invalid regex '{query}': {e}"
+    else:
+        matcher = query
+
+    matches: list[str] = []
+    for fp in root.rglob("*"):
+        if not fp.is_file() or fp.suffix not in suffixes:
+            continue
+        # Skip common heavy dirs
+        if any(part in {".git", "node_modules", ".venv", "__pycache__"} for part in fp.parts):
+            continue
+        try:
+            with fp.open(encoding="utf-8", errors="ignore") as fh:
+                for i, line in enumerate(fh, 1):
+                    hit = (
+                        matcher.search(line)  # type: ignore[union-attr]
+                        if regex
+                        else (query in line)
+                    )
+                    if hit:
+                        matches.append(f"{fp}:{i}:{line.rstrip()}")
+                        if len(matches) >= 100:
+                            return _truncate("\n".join(matches), _MAX_SEARCH_OUTPUT, "matches")
+        except OSError:
+            continue
+    if not matches:
+        return f"No matches for '{query}' in {directory}"
+    return _truncate("\n".join(matches), _MAX_SEARCH_OUTPUT, "matches")
 
 
 # -- Shell Tool (safe mode) --
 
 _BLOCKED_COMMANDS = {
+    # Disk / filesystem destruction
     "dd",
     "mkfs",
     "fdisk",
     "parted",
+    "format",
+    "diskpart",
+    # Power / boot
     "shutdown",
     "reboot",
     "init",
@@ -228,32 +287,118 @@ _BLOCKED_COMMANDS = {
     "halt",
     "grub-mkconfig",
     "update-grub",
+    # User / privilege
     "passwd",
     "adduser",
     "userdel",
-    "format",
+    "useradd",
+    "su",
+    "sudo",
+    "doas",
+    # Firewall / network state
+    "iptables",
+    "nft",
+    "ip6tables",
+    "ufw",
+    "firewall-cmd",
+    # Kernel / system control
+    "sysctl",
+    "modprobe",
+    "insmod",
+    "rmmod",
+}
+
+# Paths whose recursive deletion is always refused (even with proper flags).
+_PROTECTED_ROOTS = {
+    "/",
+    "//",
+    "/*",
+    "/.",
+    "/home",
+    "/root",
+    "/etc",
+    "/var",
+    "/usr",
+    "/boot",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/opt",
+    "~",
+    "~/",
+    ".",
+    "..",
+    "*",
+    "c:\\",
+    "c:/",
+    "c:",
+    "d:\\",
+    "d:/",
+    "d:",
+    "\\",
+    "\\\\",
 }
 
 
+def _is_dangerous_rm(args: list[str]) -> bool:
+    """rm -rf-style invocation pointed at a protected root?
+
+    Considered dangerous if recursive AND any operand resolves to a protected
+    root path (system dirs, user home, drive roots, ".", "..", "*").
+    """
+    flags_joined = " ".join(a for a in args if a.startswith("-"))
+    has_recursive = any(f in flags_joined for f in ("r", "R")) or "--recursive" in args
+    if not has_recursive:
+        return False
+    for a in args[1:]:
+        if a.startswith("-"):
+            continue
+        candidate = os.path.normpath(os.path.expanduser(a)).lower()
+        if candidate in _PROTECTED_ROOTS or a.strip() in _PROTECTED_ROOTS:
+            return True
+        # Drive-root patterns on Windows like "C:\" "D:\"
+        if len(candidate) <= 3 and candidate.endswith((":\\", ":/")):
+            return True
+    return False
+
+
 async def _shell_exec(command: str, timeout: int = 30, **kwargs) -> str:
-    """Execute a shell command safely using argument list form."""
+    """Execute a shell command safely using argument list form.
+
+    Note: NOT a real shell — pipelines, redirections, and shell globbing are not
+    interpreted. Use individual commands. Dangerous binaries are blocked.
+    """
+    if len(command) > 4000:
+        return "Error: command too long (>4000 chars)"
     try:
-        args = shlex.split(command)
+        args = shlex.split(command, posix=os.name != "nt")
     except ValueError as e:
         return f"Invalid command syntax: {e}"
     if not args:
         return "Empty command."
 
-    base = os.path.basename(args[0]).lower()
+    base = os.path.basename(args[0]).lower().removesuffix(".exe")
     if base in _BLOCKED_COMMANDS:
         return f"Blocked: '{base}' is not allowed for security reasons."
 
-    # Block recursive deletion on root-like paths
-    if base == "rm" and any(a in ("-rf", "-fr", "--recursive") for a in args):
-        for a in args[1:]:
-            normalized = os.path.normpath(a) if "/" in a else a
-            if normalized in ("/", "C:\\", "\\"):
-                return "Blocked: recursive root deletion"
+    if base == "rm" and _is_dangerous_rm(args):
+        return "Blocked: refusing recursive deletion of a protected path"
+
+    # Block shell metacharacter injection attempts when used as plain args
+    # (shlex.split already strips quoting; this catches obvious cases).
+    for a in args[1:]:
+        if any(
+            meta in a
+            for meta in (
+                ";",
+                "&&",
+                "||",
+                "`",
+                "$(",
+            )
+        ):
+            return f"Blocked: shell metacharacter in argument: {a!r}"
 
     try:
         result = subprocess.run(
@@ -261,19 +406,22 @@ async def _shell_exec(command: str, timeout: int = 30, **kwargs) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
-        output = ""
+        parts = []
         if result.stdout:
-            output += result.stdout[:20000]
+            parts.append(_truncate(result.stdout, _MAX_SHELL_OUTPUT, "stdout"))
         if result.stderr:
-            output += f"\nSTDERR:\n{result.stderr[:5000]}"
+            parts.append("STDERR:\n" + _truncate(result.stderr, 5000, "stderr"))
         if result.returncode != 0:
-            output += f"\nExit code: {result.returncode}"
-        return output or "Command completed with no output."
+            parts.append(f"[exit code: {result.returncode}]")
+        return "\n".join(parts) or "Command completed with no output."
     except subprocess.TimeoutExpired:
         return f"Command timed out after {timeout}s"
+    except FileNotFoundError:
+        return f"Command not found: {args[0]}"
     except OSError as e:
-        return f"Command not found or not executable: {e}"
+        return f"Command not executable: {e}"
     except Exception as e:
         return f"Error executing command: {e}"
 
@@ -281,6 +429,9 @@ async def _shell_exec(command: str, timeout: int = 30, **kwargs) -> str:
 # -- HTTP Tools --
 
 _http_client: httpx.AsyncClient | None = None
+
+# Allow override via env var: WA_ALLOW_PRIVATE_NET=1 to disable SSRF guard.
+_ALLOW_PRIVATE_NET = os.environ.get("WA_ALLOW_PRIVATE_NET", "0") == "1"
 
 
 async def _get_http() -> httpx.AsyncClient:
@@ -295,31 +446,57 @@ async def _get_http() -> httpx.AsyncClient:
     return _http_client
 
 
-async def _http_get(url: str, **kwargs) -> str:
+def _validate_url(url: str) -> str | None:
+    """Return None if URL is safe; otherwise an error string.
+
+    Blocks: non-http(s) schemes, private/loopback/link-local IPs, IMDS endpoint,
+    and the file:// scheme. Override with WA_ALLOW_PRIVATE_NET=1.
+    """
     parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
+    if parsed.scheme not in ("http", "https"):
+        return f"Error: only http/https URLs allowed (got {parsed.scheme!r})"
+    if not parsed.netloc:
         return f"Error: Invalid URL: {url}"
+    if _ALLOW_PRIVATE_NET:
+        return None
+    host = parsed.hostname or ""
+    if host.lower() in {"localhost", "ip6-localhost", "metadata.google.internal"}:
+        return f"Error: refusing to reach internal host {host!r} (set WA_ALLOW_PRIVATE_NET=1 to override)"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None  # hostname — DNS resolution would happen at request time
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+        return f"Error: refusing to reach private/loopback IP {ip} (set WA_ALLOW_PRIVATE_NET=1 to override)"
+    return None
+
+
+async def _http_get(url: str, **kwargs) -> str:
+    if err := _validate_url(url):
+        return err
     try:
         client = await _get_http()
         resp = await client.get(url)
-        return f"Status: {resp.status_code}\n{resp.text[:20000]}"
-    except Exception as e:
+        return f"Status: {resp.status_code}\n" + _truncate(resp.text, _MAX_SHELL_OUTPUT, "body")
+    except httpx.TimeoutException:
+        return "Error: request timed out"
+    except httpx.RequestError as e:
         return f"Error: {e}"
 
 
 async def _http_post(url: str, data: str = "", **kwargs) -> str:
-    parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
-        return f"Error: Invalid URL: {url}"
+    if err := _validate_url(url):
+        return err
     try:
         client = await _get_http()
         headers = {}
-        # Auto-detect JSON
         if data.strip().startswith(("{", "[")):
             headers["Content-Type"] = "application/json"
         resp = await client.post(url, content=data, headers=headers)
-        return f"Status: {resp.status_code}\n{resp.text[:20000]}"
-    except Exception as e:
+        return f"Status: {resp.status_code}\n" + _truncate(resp.text, _MAX_SHELL_OUTPUT, "body")
+    except httpx.TimeoutException:
+        return "Error: request timed out"
+    except httpx.RequestError as e:
         return f"Error: {e}"
 
 
@@ -440,16 +617,32 @@ def register_builtin_tools() -> None:
         ),
         Tool(
             name="code_search",
-            description="Search for text patterns in source code files",
+            description=(
+                "Search for text in source files. Set regex=true to interpret query as a "
+                "Python regex; otherwise plain substring match."
+            ),
             parameters=[
                 ToolParameter(name="directory", type="string", description="Directory to search"),
-                ToolParameter(name="query", type="string", description="Search query"),
+                ToolParameter(
+                    name="query", type="string", description="Search query (text or regex)"
+                ),
+                ToolParameter(
+                    name="regex",
+                    type="boolean",
+                    description="Treat query as a regex (default false)",
+                    required=False,
+                    default=False,
+                ),
             ],
             handler=_code_search,
         ),
         Tool(
             name="shell_exec",
-            description="Execute a shell command safely (dangerous commands are blocked)",
+            description=(
+                "Run a single command (not a real shell — no pipes, no redirection). "
+                "Dangerous binaries (rm of protected paths, dd, mkfs, shutdown, sudo, etc.) "
+                "are blocked."
+            ),
             parameters=[
                 ToolParameter(
                     name="command", type="string", description="Shell command to execute"
@@ -575,3 +768,11 @@ def register_builtin_tools() -> None:
 
     for tool in tools:
         global_registry.register(tool)
+
+
+async def close_http_client() -> None:
+    """Close the shared httpx client. Called on shutdown to free connections."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None

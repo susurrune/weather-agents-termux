@@ -58,6 +58,9 @@ class SystemContext:
     async def close_all(self) -> None:
         for agent in self.agent_map.values():
             await agent.close()
+        from weather_agents.tools.builtin import close_http_client
+
+        await close_http_client()
 
 
 def create_system_context() -> SystemContext:

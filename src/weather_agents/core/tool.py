@@ -7,6 +7,10 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+from weather_agents.core.logger import get_logger
+
+_log = get_logger("tool")
+
 
 @dataclass
 class ToolParameter:
@@ -62,12 +66,30 @@ class Tool:
         for attempt in range(self.max_retries + 1):
             try:
                 return await self.handler(**kwargs)
+            except TypeError as e:
+                # Bad arguments from the LLM — retry won't help.
+                _log.warning(
+                    "tool_bad_args",
+                    extra={"tool": self.name, "error": str(e), "kwargs": list(kwargs)},
+                )
+                return f"Error: tool '{self.name}' called with invalid arguments: {e}"
             except Exception as e:
                 last_error = str(e)
                 if attempt < self.max_retries:
+                    _log.warning(
+                        "tool_retry",
+                        extra={
+                            "tool": self.name,
+                            "attempt": attempt + 1,
+                            "error": last_error,
+                        },
+                    )
                     await asyncio.sleep(self.retry_delay * (2**attempt))
-                continue
 
+        _log.error(
+            "tool_failed",
+            extra={"tool": self.name, "retries": self.max_retries, "error": last_error},
+        )
         return f"Error executing tool '{self.name}' after {self.max_retries} retries: {last_error}"
 
 

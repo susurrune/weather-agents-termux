@@ -164,9 +164,22 @@ def _write_yaml(path: Path, data: dict) -> None:
 
 
 def _resolve_env(value: str) -> str:
-    """Resolve ${VAR} placeholders to environment variables."""
+    """Resolve ${VAR} placeholders to environment variables.
+
+    Logs a warning when the variable is missing so misconfiguration is visible
+    instead of silently substituting an empty string.
+    """
     if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-        return os.getenv(value[2:-1], "")
+        var = value[2:-1]
+        resolved = os.getenv(var)
+        if resolved is None:
+            import logging
+
+            logging.getLogger("weather_agents.config").warning(
+                "env_var_missing: %s referenced but not set; using empty string", var
+            )
+            return ""
+        return resolved
     return value
 
 
@@ -310,10 +323,21 @@ def set_config(key: str, value: str) -> tuple[bool, str]:
     SIMPLE_LLM_KEYS = ("default_model", "temperature", "max_tokens", "timeout")
     if key in SIMPLE_LLM_KEYS:
         typed_val: str | float | int = value
-        if key in ("temperature",):
-            typed_val = float(value)
-        elif key in ("max_tokens", "timeout"):
-            typed_val = int(value)
+        try:
+            if key == "temperature":
+                typed_val = float(value)
+                if not 0.0 <= typed_val <= 2.0:
+                    return False, "temperature must be in [0.0, 2.0]"
+            elif key == "max_tokens":
+                typed_val = int(value)
+                if not 1 <= typed_val <= 200_000:
+                    return False, "max_tokens must be in [1, 200000]"
+            elif key == "timeout":
+                typed_val = int(value)
+                if not 1 <= typed_val <= 600:
+                    return False, "timeout must be in [1, 600] seconds"
+        except ValueError:
+            return False, f"invalid value for {key}: {value!r}"
         _save_user_cfg({"llm": {key: typed_val}})
         return True, f"{key} → {value}"
 
