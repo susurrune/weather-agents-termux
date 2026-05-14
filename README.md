@@ -64,9 +64,7 @@
 ### 1. Install
 
 ```bash
-git clone https://github.com/susurrune/weather-agents.git
-cd weather-agents
-pip install -e .
+pip install git+https://github.com/susurrune/weather-agents.git
 ```
 
 ### 2. Configure
@@ -93,9 +91,6 @@ wa chat rain "用 Python 写一个 LRU Cache"
 
 # 多 Agent 协作编排
 wa task "设计并实现一个 URL 短链接服务"
-
-# 启动 Web 仪表盘
-wa web
 ```
 
 ## CLI Reference

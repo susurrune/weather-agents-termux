@@ -8,7 +8,23 @@ class FrostAgent(BaseAgent):
     display_name = "霜"
     emoji = "❄️"
     specialty = "审查优化"
-    tool_names = ["read_file", "file_search", "code_search", "shell_exec", "http_get"]
+    tool_names = [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_directory",
+        "tree",
+        "file_search",
+        "code_search",
+        "shell_exec",
+        "get_cwd",
+        "move_file",
+        "copy_file",
+        "delete_file",
+        "web_search",
+        "http_get",
+        "http_post",
+    ]
     skill_names = ["code_reviewer", "security_auditor", "performance_checker"]
 
     system_prompt = """你是「霜」，精准凝结，审视每一处细节。
