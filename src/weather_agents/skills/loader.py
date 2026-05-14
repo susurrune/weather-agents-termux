@@ -1,19 +1,23 @@
-"""Skill loader — auto-discovers skills from the skills package."""
+"""Skill loader — discovers skills from .py modules and .md files (Anthropic format)."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from weather_agents.core.skill import Skill, global_skill_registry
 
 
 def register_all_skills() -> None:
-    """Discover and register all built-in skills."""
-    _register_skills = _get_all_skills()
-    for skill in _register_skills:
+    """Discover and register all built-in skills from both Python and Markdown sources."""
+    for skill in _get_python_skills():
         global_skill_registry.register(skill)
+    for skill in _get_markdown_skills():
+        if skill.name not in global_skill_registry.list_names():
+            global_skill_registry.register(skill)
 
 
-def _get_all_skills() -> list[Skill]:
-    """Import each skill module and collect Skill instances."""
+def _get_python_skills() -> list[Skill]:
+    """Import each Python skill module and collect Skill instances."""
     from weather_agents.skills.api_integrator import create_skill as _api_integrator
     from weather_agents.skills.arch_designer import create_skill as _arch_designer
     from weather_agents.skills.ci_cd_manager import create_skill as _ci_cd_manager
@@ -47,3 +51,21 @@ def _get_all_skills() -> list[Skill]:
         _ci_cd_manager(),
         _api_integrator(),
     ]
+
+
+def _get_markdown_skills() -> list[Skill]:
+    """Load skills from .md files in the skills config directory.
+
+    These complement the Python-defined skills and follow the
+    Anthropic/Claude Code skill format (YAML frontmatter + markdown body).
+    """
+    import importlib.resources
+
+    try:
+        ref = importlib.resources.files("weather_agents") / "config" / "skills"
+        path = Path(str(ref))
+        if path.is_dir():
+            return global_skill_registry.load_skills_from_directory(path)
+    except Exception:
+        pass
+    return []

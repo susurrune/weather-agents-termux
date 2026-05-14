@@ -10,15 +10,40 @@ from pathlib import Path
 
 import yaml
 
-CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "config"
 USER_CONFIG_DIR = Path.home() / ".weather-agents"
+
+
+def _find_config_dir() -> Path:
+    """Locate the config/ directory reliably in dev and installed modes."""
+    from importlib.resources import files
+
+    try:
+        ref = files("weather_agents") / "config"
+        path = Path(str(ref))
+        if (path / "default.yaml").exists():
+            return path
+    except Exception:
+        pass
+
+    dev_path = Path(__file__).parent.parent.parent.parent / "config"
+    if (dev_path / "default.yaml").exists():
+        return dev_path
+
+    return USER_CONFIG_DIR / "config"
+
+
+CONFIG_DIR = _find_config_dir()
 
 
 # ── Model Catalog ──────────────────────────────────────────────────────────
 
 
 def load_model_catalog() -> dict[str, list[dict]]:
-    """Load available models from models.yaml, grouped by provider."""
+    """Load available models from models.yaml, grouped by provider.
+
+    Each entry includes: name, provider, context_window, max_output,
+    and optionally: input_cost_per_1k, output_cost_per_1k, fallback (list of model names).
+    """
     path = CONFIG_DIR / "models.yaml"
     if not path.exists():
         return {}
@@ -28,7 +53,12 @@ def load_model_catalog() -> dict[str, list[dict]]:
         if isinstance(models, dict):
             catalog[provider] = []
             for name, info in models.items():
-                catalog[provider].append({"name": name, **info})
+                entry: dict = {"name": name}
+                if isinstance(info, dict):
+                    entry.update(info)
+                else:
+                    entry["provider"] = info
+                catalog[provider].append(entry)
     return catalog
 
 
@@ -38,8 +68,17 @@ def format_models_for_display(catalog: dict[str, list[dict]]) -> str:
     for provider, models in catalog.items():
         lines.append(f"  [{provider.upper()}]")
         for m in models:
+            cost_parts = []
+            if m.get("input_cost_per_1k"):
+                cost_parts.append(f"${m['input_cost_per_1k']:.4f}/1k in")
+            if m.get("output_cost_per_1k"):
+                cost_parts.append(f"${m['output_cost_per_1k']:.4f}/1k out")
+            cost_str = f"  cost=({', '.join(cost_parts)})" if cost_parts else ""
+            fallback_str = ""
+            if m.get("fallback"):
+                fallback_str = f"  fallback->{' > '.join(m['fallback'])}"
             lines.append(
-                f"    {m['name']}  (ctx={m.get('context_window', '?')}, max={m.get('max_output', '?')})"
+                f"    {m['name']}  (ctx={m.get('context_window', '?')}, max={m.get('max_output', '?')}){cost_str}{fallback_str}"
             )
     return "\n".join(lines)
 
@@ -55,12 +94,14 @@ class LLMConfig:
     timeout: int = 120
     max_retries: int = 2
     api_keys: dict[str, str] = field(default_factory=dict)
+    language: str = "zh"
 
 
 @dataclass
 class AgentModelConfig:
     model: str | None = None
     specialty: str = ""
+    max_tool_rounds: int = 10
 
 
 @dataclass
@@ -82,12 +123,18 @@ class BusConfig:
 class MemoryConfig:
     db_path: str = "~/.weather-agents/memory.db"
     short_term_limit: int = 50
+    max_persisted_messages: int = 1000
 
 
 @dataclass
 class WebConfig:
     host: str = "127.0.0.1"
     port: int = 8765
+
+
+@dataclass
+class WorkspaceConfig:
+    path: str = "auto"  # "auto" = detect best drive; or absolute path
 
 
 @dataclass
@@ -118,6 +165,7 @@ class AppConfig:
     bus: BusConfig = field(default_factory=BusConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     plugins: PluginConfig = field(default_factory=PluginConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -214,8 +262,37 @@ def load_config() -> AppConfig:
     return cfg
 
 
+def _load_dotenv() -> None:
+    """Load .env file into os.environ, respecting existing env vars.
+
+    Priority: existing env var > .env file.
+    Looks for .env in current working directory, then user config directory.
+    """
+    for base in (Path.cwd(), USER_CONFIG_DIR):
+        dotenv_path = base / ".env"
+        if not dotenv_path.exists():
+            continue
+        try:
+            with open(dotenv_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+        except OSError:
+            pass
+
+
 def _load_config_uncached() -> AppConfig:
     cfg = AppConfig()
+
+    _load_dotenv()
 
     default_data = _load_yaml(CONFIG_DIR / "default.yaml")
     user_data = _load_yaml(USER_CONFIG_DIR / "config.yaml")
@@ -230,6 +307,7 @@ def _load_config_uncached() -> AppConfig:
         cfg.llm.temperature = llm.get("temperature", cfg.llm.temperature)
         cfg.llm.max_tokens = llm.get("max_tokens", cfg.llm.max_tokens)
         cfg.llm.timeout = llm.get("timeout", cfg.llm.timeout)
+        cfg.llm.language = llm.get("language", cfg.llm.language)
         if keys := llm.get("api_keys"):
             cfg.llm.api_keys = {k: _resolve_env(v) for k, v in keys.items()}
 
@@ -242,23 +320,35 @@ def _load_config_uncached() -> AppConfig:
                     attr.model = m
                 if s := agent_cfg.get("specialty"):
                     attr.specialty = s
+                if mr := agent_cfg.get("max_tool_rounds"):
+                    attr.max_tool_rounds = int(mr)
 
     # Web
     if web := merged.get("web"):
         cfg.web.host = web.get("host", cfg.web.host)
         cfg.web.port = web.get("port", cfg.web.port)
 
+    # Workspace
+    if ws := merged.get("workspace"):
+        cfg.workspace.path = ws.get("path", cfg.workspace.path)
+
     # Memory
     if mem := merged.get("memory"):
         cfg.memory.db_path = mem.get("db_path", cfg.memory.db_path)
         cfg.memory.short_term_limit = mem.get("short_term_limit", cfg.memory.short_term_limit)
+        cfg.memory.max_persisted_messages = mem.get(
+            "max_persisted_messages", cfg.memory.max_persisted_messages
+        )
 
-    # MCP (with env var resolution)
+    # MCP (with env var resolution — only for enabled servers)
     if (mcp := merged.get("mcp")) and (servers := mcp.get("servers")):
         resolved = []
         for s in servers:
-            env = {k: _resolve_env(v) for k, v in s.get("env", {}).items()}
-            s["env"] = env
+            if s.get("enabled", True):
+                env = {k: _resolve_env(v) for k, v in s.get("env", {}).items()}
+                s["env"] = env
+            else:
+                s["env"] = s.get("env", {})
             resolved.append(s)
         cfg.mcp.servers = resolved
 
@@ -309,6 +399,21 @@ def set_config(key: str, value: str) -> tuple[bool, str]:
         provider = parts[1]
         _save_user_cfg({"llm": {"api_keys": {provider: value}}})
         return True, f"api_key.{provider} saved"
+
+    # workspace.path
+    if len(parts) == 2 and parts[0] == "workspace":
+        if parts[1] == "path":
+            # Validate: must be "auto" or an absolute path
+            if value.lower() != "auto":
+                expanded = os.path.expanduser(value)
+                # Check the raw value is absolute so relative paths like
+                # "foo/bar" are caught (Path.resolve() would make them
+                # absolute by prepending cwd on all platforms).
+                if not Path(expanded).is_absolute():
+                    return False, f"workspace path must be absolute or 'auto', got: {value}"
+            _save_user_cfg({"workspace": {"path": value}})
+            return True, f"workspace.path → {value}"
+        return False, f"unknown workspace key: {parts[1]}"
 
     # model.<agent>
     if len(parts) == 2 and parts[0] == "model":
@@ -367,6 +472,13 @@ def delete_config(key: str) -> tuple[bool, str]:
         if removed:
             return True, f"api_key.{provider} deleted"
         return True, f"api_key.{provider} not set"
+
+    if len(parts) == 2 and parts[0] == "workspace" and parts[1] == "path":
+        removed = data.get("workspace", {}).pop("path", None)
+        if removed:
+            _write_yaml(path, data)
+            return True, "workspace.path reset to auto"
+        return True, "workspace.path already at auto"
 
     if len(parts) == 2 and parts[0] == "model":
         agent_name = parts[1]

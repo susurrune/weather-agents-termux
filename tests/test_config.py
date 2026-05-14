@@ -143,3 +143,97 @@ class TestEnvResolution:
         from weather_agents.core.config import _resolve_env
 
         assert _resolve_env("plain-value") == "plain-value"
+
+
+class TestDotenvLoading:
+    def test_load_dotenv_sets_vars(self, monkeypatch, tmp_path):
+        from weather_agents.core.config import _load_dotenv
+
+        dotenv_file = tmp_path / ".env"
+        dotenv_file.write_text(
+            "WA_DOTENV_TEST=hello_world\n# comment line\nWA_DOTENV_OTHER=other_val"
+        )
+
+        monkeypatch.delenv("WA_DOTENV_TEST", raising=False)
+        monkeypatch.delenv("WA_DOTENV_OTHER", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        _load_dotenv()
+        import os
+
+        assert os.environ.get("WA_DOTENV_TEST") == "hello_world"
+        assert os.environ.get("WA_DOTENV_OTHER") == "other_val"
+
+    def test_load_dotenv_does_not_override_existing(self, monkeypatch, tmp_path):
+        from weather_agents.core.config import _load_dotenv
+
+        dotenv_file = tmp_path / ".env"
+        dotenv_file.write_text("EXISTING_VAR=new_value")
+
+        monkeypatch.setenv("EXISTING_VAR", "original_value")
+        monkeypatch.chdir(tmp_path)
+
+        _load_dotenv()
+        import os
+
+        assert os.environ["EXISTING_VAR"] == "original_value"
+
+    def test_load_dotenv_no_file(self, monkeypatch, tmp_path):
+        from weather_agents.core.config import _load_dotenv
+
+        monkeypatch.chdir(tmp_path)
+        # Should not raise
+        _load_dotenv()
+
+    def test_load_dotenv_parses_quoted_values(self, monkeypatch, tmp_path):
+        from weather_agents.core.config import _load_dotenv
+
+        dotenv_file = tmp_path / ".env"
+        dotenv_file.write_text("QUOTED_KEY=\"value with spaces\"\nSINGLE_KEY='single_val'")
+
+        monkeypatch.delenv("QUOTED_KEY", raising=False)
+        monkeypatch.delenv("SINGLE_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        _load_dotenv()
+        import os
+
+        assert os.environ.get("QUOTED_KEY") == "value with spaces"
+        assert os.environ.get("SINGLE_KEY") == "single_val"
+
+
+class TestLanguageConfig:
+    def test_default_language_is_zh(self):
+        from weather_agents.core.config import invalidate_cache, load_config
+
+        invalidate_cache()
+        cfg = load_config()
+        assert cfg.llm.language == "zh"
+
+    def test_language_loaded_from_config(self, temp_config_dir):
+        from weather_agents.core.config import invalidate_cache, load_config
+
+        invalidate_cache()
+        cfg = load_config()
+        # Default should be zh
+        assert cfg.llm.language in ("zh", "en")
+
+
+class TestMaxToolRoundsConfig:
+    def test_default_max_tool_rounds(self):
+        from weather_agents.core.config import AppConfig
+
+        cfg = AppConfig()
+        for name in ("fog", "rain", "frost", "snow", "dew"):
+            agent_cfg = getattr(cfg.agents, name)
+            assert agent_cfg.max_tool_rounds == 10
+
+    def test_max_tool_rounds_loaded(self, temp_config_dir):
+        from weather_agents.core.config import invalidate_cache, load_config, set_config
+
+        set_config("default_model", "deepseek/deepseek-v4-flash")
+        invalidate_cache()
+        cfg = load_config()
+        for name in ("fog", "rain", "frost", "snow", "dew"):
+            agent_cfg = getattr(cfg.agents, name)
+            assert agent_cfg.max_tool_rounds == 10

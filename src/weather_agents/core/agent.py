@@ -70,7 +70,46 @@ class BaseAgent:
         self._tools: list[Tool] = []
         self._skills: list[Skill] = []
         self._active_skills: set[str] = set()
+        self._skill_tools: dict[str, list[str]] = {}  # skill_name -> tool_names
         self._base_system_prompt: str = ""
+        agent_cfg = getattr(config.agents, self.name, None)
+        self._max_tool_rounds: int = agent_cfg.max_tool_rounds if agent_cfg else 10
+
+    def _resolve_system_prompt(self) -> str:
+        """Pick the language-appropriate system prompt based on config."""
+        lang = getattr(self.config.llm, "language", "zh")
+        if lang == "en" and hasattr(self.__class__, "system_prompt_en"):
+            return self.__class__.system_prompt_en  # type: ignore[no-any-return]
+        return self.system_prompt
+
+    def _inject_workspace_info(self, prompt: str) -> str:
+        """Append workspace path to the system prompt."""
+        from weather_agents.core.workspace import init_workspace, resolve_workspace_path
+
+        ws_root = resolve_workspace_path(self.config.workspace.path)
+        init_workspace(ws_root)  # idempotent — ensures tree exists
+        ws_str = str(ws_root.resolve())
+
+        lang = getattr(self.config.llm, "language", "zh")
+        if lang == "en":
+            ws_block = (
+                f"\n\n## Workspace\n"
+                f"Your workspace directory is `{ws_str}`.\n"
+                f"- Use `{ws_str}/files/` for generated files.\n"
+                f"- Use `{ws_str}/output/` for task results and exports.\n"
+                f"- Use `{ws_str}/temp/` for temporary/scratch files.\n"
+                f"- Always prefer paths under the workspace for file operations."
+            )
+        else:
+            ws_block = (
+                f"\n\n## 工作空间\n"
+                f"你的工作空间目录是 `{ws_str}`。\n"
+                f"- 生成的文件放在 `{ws_str}/files/`\n"
+                f"- 任务结果和导出放在 `{ws_str}/output/`\n"
+                f"- 临时文件放在 `{ws_str}/temp/`\n"
+                f"- 所有文件操作优先使用工作空间内的路径。"
+            )
+        return prompt + ws_block
 
     async def init(self) -> None:
         """Initialize agent (memory, subscriptions, skills, etc). Idempotent."""
@@ -79,10 +118,13 @@ class BaseAgent:
             # re-append the system message.
             return
         await self.memory.init_db()
-        self._base_system_prompt = self.system_prompt
+        self._base_system_prompt = self._resolve_system_prompt()
+        # Inject workspace path into system prompt so agents know where to
+        # read/write files.
+        self._base_system_prompt = self._inject_workspace_info(self._base_system_prompt)
         # Only inject system prompt if it isn't already at the head of short_term.
         if not any(m.role == "system" for m in self.memory.short_term):
-            self.memory.add_message("system", self.system_prompt)
+            self.memory.add_message("system", self._base_system_prompt)
         self._tools = (
             self.tool_registry.get_tools(self.tool_names) or self.tool_registry.get_tools()
         )
@@ -99,25 +141,41 @@ class BaseAgent:
                     self._tools.append(tool)
 
     def activate_skill(self, name: str) -> bool:
-        """Activate a skill by name. Returns True if found and activated."""
-        if not any(s.name == name for s in self._skills):
+        """Activate a skill by name. Invokes handler for custom tool injection.
+
+        Searches both pre-loaded skills and the global registry, allowing
+        runtime activation of any registered skill.
+        """
+        skill = next((s for s in self._skills if s.name == name), None)
+        if not skill:
+            skill = self.skill_registry.get(name)
+            if skill:
+                self._skills.append(skill)
+        if not skill:
             return False
         self._active_skills.add(name)
+        if skill.handler:
+            handler_tools = skill.handler(self, self.tool_registry)
+            if handler_tools:
+                self._skill_tools[name] = [t.name for t in handler_tools]
         self._rebuild_system_prompt()
         return True
 
     def deactivate_skill(self, name: str) -> bool:
-        """Deactivate a skill. Returns True if it was active."""
+        """Deactivate a skill. Removes handler-injected tools."""
         if name not in self._active_skills:
             return False
         self._active_skills.discard(name)
+        # Remove handler-injected tools
+        for tool_name in self._skill_tools.pop(name, []):
+            self.tool_registry.unregister(tool_name)
         self._rebuild_system_prompt()
         return True
 
     def deactivate_all_skills(self) -> None:
-        """Deactivate all skills and restore the base system prompt."""
-        self._active_skills.clear()
-        self._rebuild_system_prompt()
+        """Deactivate all skills, remove handler tools, restore base prompt."""
+        for name in list(self._active_skills):
+            self.deactivate_skill(name)
 
     def _rebuild_system_prompt(self) -> None:
         """Rebuild the system prompt with active skill prompts appended."""
@@ -205,7 +263,12 @@ class BaseAgent:
             if on_status:
                 on_status("thinking...")
             response = await self._llm_loop(on_status=on_status)
-            self.memory.add_message("assistant", response.content)
+            self.memory.add_message(
+                "assistant",
+                response.content,
+                tool_calls=response.tool_calls,
+                reasoning_content=response.reasoning_content,
+            )
             await self._set_state(AgentState.IDLE)
             return response.content
         except Exception as e:
@@ -214,24 +277,97 @@ class BaseAgent:
             self.memory.add_message("assistant", error_msg)
             return error_msg
 
-    async def chat_stream(self, message: str) -> AsyncIterator[str]:
-        """Streaming chat mode. Yields content chunks as they arrive."""
+    async def chat_stream(self, message: str) -> AsyncIterator[dict]:
+        """Streaming chat with tool-call support.
+
+        Yields: {"type": "content", "text": "..."} | {"type": "tool_status", "label": "..."} | {"type": "done"}
+        """
         await self._set_state(AgentState.THINKING)
         self.memory.add_message("user", message)
 
-        full_content = ""
-        messages = self.memory.get_messages()
-
         try:
-            async for chunk in self.llm.stream(messages=messages, agent_name=self.name):
-                full_content += chunk
-                yield chunk
+            for _iteration in range(self._max_tool_rounds):
+                messages = self.memory.get_messages()
+                tool_names = self._active_tool_names()
 
-            self.memory.add_message("assistant", full_content)
-            await self._set_state(AgentState.IDLE)
+                tool_calls_received: list[dict] = []
+                async for event in self.llm.stream_with_tools(
+                    messages=messages,
+                    agent_name=self.name,
+                    tools=tool_names or None,
+                    tool_registry=self.tool_registry if tool_names else None,
+                ):
+                    if event.type == "content":
+                        yield {"type": "content", "text": event.text}
+                    elif event.type == "tool_call" and event.tool_call:
+                        tool_calls_received.append(event.tool_call)
+                    elif event.type == "error":
+                        yield {"type": "content", "text": f"\n[Error: {event.text}]"}
+                        await self._set_state(AgentState.ERROR)
+                        return
+
+                if not tool_calls_received:
+                    await self._set_state(AgentState.IDLE)
+                    yield {"type": "done"}
+                    return
+
+                # Record assistant message with tool calls
+                self.memory.add_message(
+                    "assistant",
+                    "",
+                    tool_calls=tool_calls_received,
+                )
+
+                for tc in tool_calls_received:
+                    tool_name = tc["function"]["name"]
+                    raw_args = tc["function"]["arguments"]
+                    if isinstance(raw_args, str):
+                        try:
+                            tool_args = json.loads(raw_args)
+                        except json.JSONDecodeError as e:
+                            tool_args = None
+                            parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {e}\nRaw arguments: {raw_args}"
+                    else:
+                        tool_args = raw_args
+
+                    tool_label = (
+                        _tool_status_label(tool_name, tool_args)
+                        if tool_args
+                        else f"{tool_name} (bad args)"
+                    )
+                    yield {"type": "tool_status", "label": tool_label}
+
+                    if tool_args is None:
+                        self.memory.add_message(
+                            "tool",
+                            parse_error,
+                            name=tool_name,
+                            tool_call_id=tc["id"],
+                        )
+                    else:
+                        tool = self.tool_registry.get(tool_name)
+                        if tool:
+                            await self._set_state(AgentState.ACTING)
+                            result = await tool.execute(**tool_args)
+                            self.memory.add_message(
+                                "tool",
+                                result,
+                                name=tool_name,
+                                tool_call_id=tc["id"],
+                            )
+                        else:
+                            self.memory.add_message(
+                                "tool",
+                                f"Tool '{tool_name}' not found",
+                                name=tool_name,
+                                tool_call_id=tc["id"],
+                            )
+            # Max iterations reached
+            yield {"type": "done"}
+
         except Exception as e:
             await self._set_state(AgentState.ERROR)
-            yield f"\n[Error: {e}]"
+            yield {"type": "content", "text": f"\n[Error: {e}]"}
 
     def _active_tool_names(self) -> list[str]:
         """Tool names available to this agent (base + merged from active skills)."""
@@ -281,37 +417,60 @@ class BaseAgent:
                 "assistant",
                 response.content or "",
                 tool_calls=response.tool_calls,
+                reasoning_content=response.reasoning_content,
             )
 
             for tc in response.tool_calls:
-                tool = self.tool_registry.get(tc["name"])
-                tool_label = _tool_status_label(tc["name"], tc["arguments"])
+                tool_name = tc["function"]["name"]
+                raw_args = tc["function"]["arguments"]
+                if isinstance(raw_args, str):
+                    try:
+                        tool_args = json.loads(raw_args)
+                    except json.JSONDecodeError as e:
+                        tool_args = None
+                        parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {e}\nRaw arguments: {raw_args}"
+                else:
+                    tool_args = raw_args
+
+                tool = self.tool_registry.get(tool_name)
+                tool_label = (
+                    _tool_status_label(tool_name, tool_args)
+                    if tool_args
+                    else f"{tool_name} (bad args)"
+                )
 
                 self.bus.add_event(
                     Event(
                         type=EventType.TOOL_CALL,
                         source=self.name,
-                        data={"tool": tc["name"], "args": tc["arguments"]},
+                        data={"tool": tool_name, "args": tool_args or {}},
                     )
                 )
 
                 if on_status:
                     on_status(tool_label)
 
-                if tool:
+                if tool_args is None:
+                    self.memory.add_message(
+                        "tool",
+                        parse_error,
+                        name=tool_name,
+                        tool_call_id=tc["id"],
+                    )
+                elif tool:
                     await self._set_state(AgentState.ACTING)
-                    result = await tool.execute(**tc["arguments"])
+                    result = await tool.execute(**tool_args)
                     self.memory.add_message(
                         "tool",
                         result,
-                        name=tc["name"],
+                        name=tool_name,
                         tool_call_id=tc["id"],
                     )
                 else:
                     self.memory.add_message(
                         "tool",
-                        f"Tool '{tc['name']}' not found",
-                        name=tc["name"],
+                        f"Tool '{tool_name}' not found",
+                        name=tool_name,
                         tool_call_id=tc["id"],
                     )
 
@@ -339,7 +498,12 @@ class BaseAgent:
 
         try:
             response = await self._llm_loop(on_status=on_status)
-            self.memory.add_message("assistant", response.content)
+            self.memory.add_message(
+                "assistant",
+                response.content,
+                tool_calls=response.tool_calls,
+                reasoning_content=response.reasoning_content,
+            )
             task.status = "completed"
             task.result = response.content
             await self._set_state(AgentState.IDLE)
@@ -397,6 +561,9 @@ _TOOL_LABELS: dict[str, str] = {
     "delete_file": "Deleting {path}",
     "get_cwd": "Getting working directory",
     "tree": "Tree {directory}",
+    "lint_file": "Linting {path}",
+    "scan_deps": "Scanning {directory}",
+    "fetch_page": "Fetching {url}",
 }
 
 

@@ -1,6 +1,64 @@
 """Skill: Code Reviewer — systematic code review with severity grading."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from weather_agents.core.skill import Skill
+from weather_agents.core.tool import Tool, ToolParameter
+
+if TYPE_CHECKING:
+    from weather_agents.core.tool import ToolRegistry
+
+
+def _make_lint_file_handler():
+    """Create the lint_file handler — checks a file for common Python issues."""
+
+    async def lint_file(path: str) -> str:
+        import ast
+        import os
+
+        expanded = os.path.expanduser(path)
+        if not os.path.isfile(expanded):
+            return f"File not found: {path}"
+
+        try:
+            with open(expanded, encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source, filename=expanded)
+        except SyntaxError as e:
+            return f"Syntax error at line {e.lineno}: {e.msg}"
+
+        issues = []
+
+        for node in ast.walk(tree):
+            # Detect bare except clauses
+            if isinstance(node, ast.ExceptHandler) and node.type is None:
+                issues.append(f"[WARN] line {node.lineno}: bare except clause")
+
+            # Detect print() usage (debug leftover)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "print"
+            ):
+                issues.append(f"[INFO] line {node.lineno}: print() call — verify if intentional")
+
+            # Detect use of eval/exec
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("eval", "exec")
+            ):
+                issues.append(
+                    f"[CRITICAL] line {node.lineno}: {node.func.id}() — potential code injection"
+                )
+
+        if not issues:
+            return f"Lint passed for {path}. No issues detected."
+        return "\n".join(issues)
+
+    return lint_file
 
 
 def create_skill() -> Skill:
@@ -8,14 +66,34 @@ def create_skill() -> Skill:
         name="code_reviewer",
         description="Systematic code review, bug detection, style checking, best-practice validation",
         required_tools=["read_file", "file_search", "code_search"],
-        system_prompt="""## 技能：代码审查 (Code Reviewer)
-你激活了「代码审查」技能。在此模式下：
-1. 按以下维度逐项审查代码：
-   🔴 正确性 — 逻辑错误、边界条件、并发问题
-   🟡 可维护性 — 命名、结构、注释、复杂度
-   🔵 安全性 — 注入、XSS、敏感信息泄漏
-   🟢 性能 — 算法效率、资源泄漏、缓存机会
-2. 每个问题标注严重等级
-3. 给问题附上具体的修复建议和代码示例
-4. 最终给出总体评分和优先级排序""",
+        handler=lambda agent, registry: _inject_lint_tool(registry),
+        system_prompt="""## Skill: Code Reviewer
+You have activated the Code Reviewer skill. In this mode:
+1. Review code across these dimensions:
+   - Correctness — logic errors, boundary conditions, concurrency issues
+   - Maintainability — naming, structure, complexity
+   - Security — injection, XSS, sensitive data exposure
+   - Performance — algorithm efficiency, resource leaks
+2. Tag each issue with severity level
+3. Provide concrete fix suggestions with code examples
+4. End with an overall score and prioritized fix list
+5. Use the `lint_file` tool for automated static analysis before manual review""",
     )
+
+
+def _inject_lint_tool(registry: ToolRegistry) -> list[Tool]:
+    tool = Tool(
+        name="lint_file",
+        description="Run static analysis on a Python file to detect common issues (bare except, eval, print calls, etc.)",
+        parameters=[
+            ToolParameter(
+                name="path",
+                type="string",
+                description="Path to the Python file to lint",
+                required=True,
+            ),
+        ],
+        handler=_make_lint_file_handler(),
+    )
+    registry.register(tool)
+    return [tool]

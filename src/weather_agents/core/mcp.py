@@ -1,7 +1,8 @@
-"""MCP (Model Context Protocol) client for connecting to MCP servers.
+"""MCP (Model Context Protocol) client — Anthropic-compatible transport.
 
-Integrates MCP tools into the Weather Agents tool registry,
-supporting both stdio-based and SSE-based MCP servers.
+Implements the MCP 2025-03-26 specification with two transports:
+- stdio: subprocess-based with JSON-RPC over stdin/stdout
+- SSE: text/event-stream via httpx.stream with jsonrpc POST endpoint
 """
 
 from __future__ import annotations
@@ -21,24 +22,27 @@ from weather_agents.core.tool import Tool, ToolParameter, ToolRegistry
 
 _log = get_logger("mcp")
 
+MCP_PROTOCOL_VERSION = "2025-03-26"
+CLIENT_INFO = {"name": "weather-agents", "version": "1.0.0"}
+
 
 @dataclass
 class MCPServerConfig:
     """Configuration for an MCP server connection."""
 
     name: str
-    command: str | None = None  # stdio: executable
-    args: list[str] = field(default_factory=list)  # stdio: args
-    url: str | None = None  # SSE: server URL
+    command: str | None = None
+    args: list[str] = field(default_factory=list)
+    url: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
 
 
 class MCPClient:
-    """Client for connecting to a single MCP server and listing tools.
+    """Client for connecting to a single MCP server.
 
-    Supports concurrent requests via JSON-RPC id correlation: each call_tool
-    awaits its own Future, fulfilled by a background reader task.
+    Supports both stdio (subprocess) and SSE (text/event-stream) transports.
+    Uses JSON-RPC 2.0 with id-based correlation for concurrent requests.
     """
 
     def __init__(self, config: MCPServerConfig) -> None:
@@ -49,16 +53,19 @@ class MCPClient:
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._reader_task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
+        # SSE-specific state
+        self._http_client: httpx.AsyncClient | None = None
+        self._sse_response: httpx.Response | None = None
+        self._sse_message_url: str = ""
 
     def _new_id(self) -> int:
         self._next_id += 1
         return self._next_id
 
-    async def initialize(self) -> list[dict]:
-        """Connect to the MCP server and list available tools.
+    # ── Initialize ──────────────────────────────────────────────────────
 
-        Returns a list of MCP tool definitions (name, description, inputSchema).
-        """
+    async def initialize(self) -> list[dict]:
+        """Connect to the MCP server and list available tools."""
         try:
             if self.config.command:
                 return await self._init_stdio()
@@ -71,14 +78,25 @@ class MCPClient:
             )
         return []
 
+    async def health_check(self) -> dict[str, Any]:
+        """Perform a health check on the MCP connection.
+
+        Returns a dict with 'healthy' (bool) and 'details' (str).
+        """
+        if self.config.command:
+            return await self._health_stdio()
+        elif self.config.url:
+            return await self._health_sse()
+        return {"healthy": False, "details": "No transport configured"}
+
+    # ── stdio transport ─────────────────────────────────────────────────
+
     async def _init_stdio(self) -> list[dict]:
-        """Connect via stdio transport."""
-        # Inherit caller's environment so the child can find PATH, HOME, npx, etc.
-        env = {**os.environ, **(self.config.env or {})}
         cmd = self.config.command
         if not cmd:
             return []
 
+        env = {**os.environ, **(self.config.env or {})}
         self._process = await asyncio.create_subprocess_exec(
             cmd,
             *self.config.args,
@@ -87,117 +105,99 @@ class MCPClient:
             stderr=subprocess.PIPE,
             env=env,
         )
-
-        # Start the background reader so subsequent _request calls can correlate.
-        self._reader_task = asyncio.create_task(self._read_loop())
+        self._reader_task = asyncio.create_task(self._read_stdio_loop())
 
         try:
-            init_response = await self._request(
+            init_response = await self._request_stdio(
                 "initialize",
                 {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "weather-agents", "version": "1.0.0"},
+                    "clientInfo": CLIENT_INFO,
                 },
             )
             if not init_response or "error" in init_response:
                 return []
 
-            # Notifications have no id and no reply.
             await self._send_json(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {},
-                }
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
             )
 
-            tools_response = await self._request("tools/list", {})
+            tools_response = await self._request_stdio("tools/list", {})
             if tools_response and "result" in tools_response:
                 self._server_tools = tools_response["result"].get("tools", [])
 
             return self._server_tools
         except Exception as e:
             _log.warning(
-                "mcp_init_failed",
+                "mcp_stdio_init_failed",
                 extra={"server": self.config.name, "error": str(e)},
             )
             await self.close()
             return []
 
-    async def _init_sse(self) -> list[dict]:
-        """Connect via SSE transport."""
-        url = (self.config.url or "").rstrip("/")
-
+    async def _health_stdio(self) -> dict[str, Any]:
+        if not self._process or self._process.returncode is not None:
+            return {"healthy": False, "details": "stdio process not running"}
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{url}/initialize",
-                    json={
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {},
-                        "clientInfo": {"name": "weather-agents", "version": "0.1.0"},
-                    },
-                )
-                if resp.status_code != 200:
-                    return []
-
-                resp = await client.post(
-                    f"{url}/tools/list",
-                    json={},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._server_tools = data.get("tools", [])
-        except Exception:
-            return []
-
-        return self._server_tools
-
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """Call a tool on the MCP server and return the result."""
-        if self.config.command:
-            return await self._call_stdio(name, arguments)
-        elif self.config.url:
-            return await self._call_sse(name, arguments)
-        return f"Error: No transport configured for MCP server '{self.config.name}'"
-
-    async def _call_stdio(self, name: str, arguments: dict[str, Any]) -> str:
-        response = await self._request(
-            "tools/call",
-            {"name": name, "arguments": arguments},
-            timeout=60.0,
-        )
-        if response and "result" in response:
-            result = response["result"]
-            parts = []
-            for item in result.get("content", []):
-                if item.get("type") == "text":
-                    parts.append(item["text"])
-                elif item.get("type") == "resource":
-                    parts.append(json.dumps(item.get("resource", {}), ensure_ascii=False))
-            return "\n".join(parts) if parts else "Tool returned no content."
-        error = response.get("error", {}) if response else {}
-        return f"MCP tool error: {error.get('message', 'unknown')}"
-
-    async def _call_sse(self, name: str, arguments: dict[str, Any]) -> str:
-        url = (self.config.url or "").rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{url}/tools/call",
-                    json={"name": name, "arguments": arguments},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    parts = []
-                    for item in data.get("content", []):
-                        if item.get("type") == "text":
-                            parts.append(item["text"])
-                    return "\n".join(parts) if parts else "No text content returned."
-                return f"Error: HTTP {resp.status_code}"
+            resp = await self._request_stdio("ping", {}, timeout=5.0)
+            if resp and "result" in resp:
+                return {"healthy": True, "details": "ok"}
+            return {"healthy": False, "details": f"unexpected ping response: {resp}"}
         except Exception as e:
-            return f"MCP SSE call error: {e}"
+            return {"healthy": False, "details": str(e)}
+
+    async def _read_stdio_loop(self) -> None:
+        if not self._process or not self._process.stdout:
+            return
+        stdout = self._process.stdout
+        try:
+            while True:
+                line = await stdout.readline()
+                if not line:
+                    break
+                msg = self._parse_json_line(line)
+                if msg is None:
+                    continue
+                msg_id = msg.get("id")
+                if msg_id is None:
+                    continue
+                fut = self._pending.get(msg_id)
+                if fut and not fut.done():
+                    fut.set_result(msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _log.warning(
+                "mcp_stdio_read_error",
+                extra={"server": self.config.name, "error": str(e)},
+            )
+        finally:
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.cancel()
+
+    async def _request_stdio(
+        self, method: str, params: dict, timeout: float = 10.0
+    ) -> dict[str, Any] | None:
+        if not self._process or not self._process.stdin:
+            return None
+        req_id = self._new_id()
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending[req_id] = fut
+
+        await self._send_json({"jsonrpc": "2.0", "method": method, "params": params, "id": req_id})
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except TimeoutError:
+            _log.warning(
+                "mcp_stdio_timeout",
+                extra={"server": self.config.name, "method": method},
+            )
+            return None
+        finally:
+            self._pending.pop(req_id, None)
 
     async def _send_json(self, data: dict) -> None:
         if not self._process or not self._process.stdin:
@@ -207,50 +207,158 @@ class MCPClient:
             self._process.stdin.write(line.encode())
             await self._process.stdin.drain()
 
-    async def _request(
-        self,
-        method: str,
-        params: dict,
-        timeout: float = 10.0,
-    ) -> dict[str, Any] | None:
-        """Send a JSON-RPC request and await the matching response by id."""
-        if not self._process or not self._process.stdin:
-            return None
-        req_id = self._new_id()
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
-        self._pending[req_id] = fut
+    # ── SSE transport ───────────────────────────────────────────────────
 
-        await self._send_json({"jsonrpc": "2.0", "method": method, "params": params, "id": req_id})
+    async def _init_sse(self) -> list[dict]:
+        """Connect via SSE transport per MCP 2025-03-26 spec.
+
+        Flow:
+        1. GET /sse to open the event stream
+        2. Receive `endpoint` event with the message URL
+        3. POST initialize to the message endpoint
+        4. POST tools/list to the message endpoint
+        """
+        url = (self.config.url or "").rstrip("/")
+        sse_url = f"{url}/sse"
 
         try:
-            return await asyncio.wait_for(fut, timeout=timeout)
-        except TimeoutError:
-            _log.warning(
-                "mcp_request_timeout",
-                extra={"server": self.config.name, "method": method, "id": req_id},
+            self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10))
+            # Open SSE stream
+            response = await self._http_client.send(
+                self._http_client.build_request("GET", sse_url),
+                stream=True,
             )
-            return None
-        finally:
-            self._pending.pop(req_id, None)
+            self._sse_response = response
+            if response.status_code != 200:
+                _log.warning(
+                    "mcp_sse_connect_failed",
+                    extra={"server": self.config.name, "status": response.status_code},
+                )
+                return []
 
-    async def _read_loop(self) -> None:
-        """Background task: read JSON-RPC responses and dispatch by id."""
-        if not self._process or not self._process.stdout:
-            return
-        stdout = self._process.stdout
+            # Read the endpoint event
+            self._sse_message_url = ""
+            sse_events = self._iter_sse_events(response)
+            try:
+                first_event = await asyncio.wait_for(sse_events.__anext__(), timeout=10)
+            except (TimeoutError, StopAsyncIteration):
+                _log.warning(
+                    "mcp_sse_no_endpoint",
+                    extra={"server": self.config.name},
+                )
+                return []
+
+            if first_event.get("event") != "endpoint":
+                _log.warning(
+                    "mcp_sse_unexpected_first_event",
+                    extra={"server": self.config.name, "event": first_event},
+                )
+                return []
+
+            endpoint_path = first_event.get("data", "").strip()
+            if not endpoint_path:
+                return []
+            # Resolve relative/absolute endpoint URL
+            if endpoint_path.startswith("http"):
+                self._sse_message_url = endpoint_path
+            else:
+                self._sse_message_url = f"{url}{endpoint_path}"
+
+            # Start background SSE reader for subsequent responses
+            self._reader_task = asyncio.create_task(self._read_sse_loop(response))
+
+            # POST initialize
+            init_response = await self._request_sse(
+                "initialize",
+                {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": CLIENT_INFO,
+                },
+            )
+            if not init_response or "error" in init_response:
+                return []
+
+            # Send initialized notification
+            await self._post_json(
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+            )
+
+            # POST tools/list
+            tools_response = await self._request_sse("tools/list", {})
+            if tools_response and "result" in tools_response:
+                self._server_tools = tools_response["result"].get("tools", [])
+
+            return self._server_tools
+        except Exception as e:
+            _log.warning(
+                "mcp_sse_init_failed",
+                extra={"server": self.config.name, "error": str(e)},
+            )
+            await self.close()
+            return []
+
+    async def _health_sse(self) -> dict[str, Any]:
+        if not self._http_client or not self._sse_message_url:
+            return {"healthy": False, "details": "SSE connection not established"}
         try:
-            while True:
-                line = await stdout.readline()
-                if not line:
-                    break
-                try:
-                    msg = json.loads(line.decode())
-                except (json.JSONDecodeError, ValueError):
+            resp = await self._request_sse("ping", {}, timeout=5.0)
+            if resp and "result" in resp:
+                return {"healthy": True, "details": "ok"}
+            return {"healthy": False, "details": f"unexpected ping response: {resp}"}
+        except Exception as e:
+            return {"healthy": False, "details": str(e)}
+
+    async def _iter_sse_events(self, response: httpx.Response):
+        """Parse text/event-stream into dicts with event/data/id fields."""
+        buffer = ""
+        async for chunk in response.aiter_bytes():
+            buffer += chunk.decode("utf-8", errors="replace")
+            while "\n\n" in buffer:
+                event_str, buffer = buffer.split("\n\n", 1)
+                event = self._parse_sse_event(event_str)
+                if event:
+                    yield event
+
+    @staticmethod
+    def _parse_sse_event(text: str) -> dict[str, str] | None:
+        """Parse a single SSE event block into a dict.
+
+        Fields: event (default "message"), data, id, retry.
+        """
+        event: dict[str, str] = {"event": "message"}
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line or line.startswith(":"):
+                continue
+            if ":" not in line:
+                continue
+            field, _, value = line.partition(":")
+            value = value.lstrip(" ")
+            if field == "data":
+                if "data" in event:
+                    event["data"] += "\n" + value
+                else:
+                    event["data"] = value
+            else:
+                event[field] = value
+        # Events with no data field are keepalive/heartbeat — skip
+        if "data" not in event:
+            return None
+        return event
+
+    async def _read_sse_loop(self, response: httpx.Response) -> None:
+        """Background task: read SSE events and dispatch JSON-RPC responses by id."""
+        try:
+            async for event in self._iter_sse_events(response):
+                data_str = event.get("data", "")
+                if not data_str:
+                    continue
+                msg = self._parse_json_str(data_str)
+                if msg is None:
                     continue
                 msg_id = msg.get("id")
                 if msg_id is None:
-                    # Notification — ignore.
                     continue
                 fut = self._pending.get(msg_id)
                 if fut and not fut.done():
@@ -259,14 +367,79 @@ class MCPClient:
             raise
         except Exception as e:
             _log.warning(
-                "mcp_read_loop_error",
+                "mcp_sse_read_error",
                 extra={"server": self.config.name, "error": str(e)},
             )
         finally:
-            # Cancel any still-pending futures.
             for fut in self._pending.values():
                 if not fut.done():
                     fut.cancel()
+
+    async def _request_sse(
+        self, method: str, params: dict, timeout: float = 10.0
+    ) -> dict[str, Any] | None:
+        req_id = self._new_id()
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending[req_id] = fut
+
+        await self._post_json({"jsonrpc": "2.0", "method": method, "params": params, "id": req_id})
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except TimeoutError:
+            _log.warning(
+                "mcp_sse_timeout",
+                extra={"server": self.config.name, "method": method},
+            )
+            return None
+        finally:
+            self._pending.pop(req_id, None)
+
+    async def _post_json(self, data: dict) -> None:
+        if not self._http_client or not self._sse_message_url:
+            return
+        try:
+            await self._http_client.post(
+                self._sse_message_url,
+                json=data,
+            )
+        except Exception as e:
+            _log.warning(
+                "mcp_sse_post_error",
+                extra={"server": self.config.name, "error": str(e)},
+            )
+
+    # ── Tool execution ──────────────────────────────────────────────────
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        """Call a tool on the MCP server. Uses the active transport."""
+        response = None
+        if self.config.command:
+            response = await self._request_stdio(
+                "tools/call", {"name": name, "arguments": arguments}, timeout=60.0
+            )
+        elif self.config.url:
+            response = await self._request_sse(
+                "tools/call", {"name": name, "arguments": arguments}, timeout=60.0
+            )
+
+        if response and "result" in response:
+            return self._extract_tool_result(response["result"])
+        error = response.get("error", {}) if response else {}
+        return f"MCP tool error: {error.get('message', 'unknown')}"
+
+    @staticmethod
+    def _extract_tool_result(result: dict) -> str:
+        """Extract text content from an MCP tool result."""
+        parts = []
+        for item in result.get("content", []):
+            if item.get("type") == "text":
+                parts.append(item["text"])
+            elif item.get("type") == "resource":
+                parts.append(json.dumps(item.get("resource", {}), ensure_ascii=False))
+        return "\n".join(parts) if parts else "Tool returned no content."
+
+    # ── Cleanup ─────────────────────────────────────────────────────────
 
     async def close(self) -> None:
         if self._reader_task and not self._reader_task.done():
@@ -274,6 +447,7 @@ class MCPClient:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reader_task
         self._reader_task = None
+
         proc = self._process
         if proc:
             try:
@@ -285,9 +459,38 @@ class MCPClient:
                 pass
             self._process = None
 
+        sse_resp = self._sse_response
+        if sse_resp:
+            with contextlib.suppress(Exception):
+                await sse_resp.aclose()
+            self._sse_response = None
+
+        http = self._http_client
+        if http:
+            with contextlib.suppress(Exception):
+                await http.aclose()
+            self._http_client = None
+
+        self._sse_message_url = ""
+
     def get_tool_definitions(self) -> list[dict]:
-        """Get raw MCP tool definitions from the server."""
         return self._server_tools
+
+    # ── JSON helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_json_line(line: bytes) -> dict | None:
+        try:
+            return json.loads(line.decode())  # type: ignore[no-any-return]
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_json_str(text: str) -> dict | None:
+        try:
+            return json.loads(text)  # type: ignore[no-any-return]
+        except (json.JSONDecodeError, ValueError):
+            return None
 
 
 class MCPManager:
@@ -316,27 +519,22 @@ class MCPManager:
     async def connect_all(self) -> list[str]:
         """Connect to all configured MCP servers and register tools.
 
-        Returns a list of (server_name: tool_count) strings.
+        Returns list of "server_name: N tools" strings.
         """
         results = []
-
         for cfg in self._server_configs:
             if not cfg.enabled:
                 continue
-
             client = MCPClient(cfg)
             tools = await client.initialize()
             if not tools:
                 continue
-
             self.clients[cfg.name] = client
             count = self._register_mcp_tools(cfg.name, tools)
             results.append(f"{cfg.name}: {count} tools")
-
         return results
 
     def _register_mcp_tools(self, server_name: str, mcp_tools: list[dict]) -> int:
-        """Convert MCP tool definitions into Tool and register them."""
         count = 0
         for mt in mcp_tools:
             name = mt.get("name", "")
@@ -351,18 +549,16 @@ class MCPManager:
             required = input_schema.get("required", []) if input_schema else []
 
             for param_name, param_schema in props.items():
-                param_type = param_schema.get("type", "string")
                 parameters.append(
                     ToolParameter(
                         name=param_name,
-                        type=param_type,
+                        type=param_schema.get("type", "string"),
                         description=param_schema.get("description", ""),
                         required=param_name in required,
                     )
                 )
 
             mcp_tool_name = f"mcp_{server_name}_{name}"
-
             tool = Tool(
                 name=mcp_tool_name,
                 description=f"[MCP/{server_name}] {description}",
@@ -371,12 +567,9 @@ class MCPManager:
             )
             self.tool_registry.register(tool)
             count += 1
-
         return count
 
     def _make_mcp_handler(self, server_name: str, tool_name: str):
-        """Create a handler function that calls the MCP tool."""
-
         async def handler(**kwargs) -> str:
             client = self.clients.get(server_name)
             if not client:

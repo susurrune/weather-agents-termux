@@ -102,6 +102,13 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
 
+    def unregister(self, name: str) -> bool:
+        """Remove a tool by name. Returns True if it was registered."""
+        if name in self._tools:
+            del self._tools[name]
+            return True
+        return False
+
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 

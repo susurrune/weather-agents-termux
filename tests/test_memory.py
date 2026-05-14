@@ -131,6 +131,176 @@ class TestLongTermMemory:
         assert len(results) == 3
 
 
+class TestSessionManagement:
+    @pytest.mark.asyncio
+    async def test_create_session(self, mem):
+        sid = await mem.create_session("test session")
+        assert len(sid) == 12
+        assert mem.get_active_session() == sid
+
+    @pytest.mark.asyncio
+    async def test_list_sessions(self, mem):
+        sid1 = await mem.create_session("session A")
+        sid2 = await mem.create_session("session B")
+        sessions = await mem.list_sessions()
+        assert len(sessions) == 2
+        ids = [s["id"] for s in sessions]
+        assert sid1 in ids
+        assert sid2 in ids
+
+    @pytest.mark.asyncio
+    async def test_load_session(self, mem):
+        sid = await mem.create_session("test")
+        mem.add_message("user", "hello in session")
+        await mem._flush_pending()
+
+        # Switch to a new session, verify old message not in short term
+        sid2 = await mem.create_session("another")
+        assert mem.get_active_session() == sid2
+        msgs = [m for m in mem.short_term if m.role != "system"]
+        assert len(msgs) == 0
+
+        # Load back the original session
+        ok = await mem.load_session(sid)
+        assert ok is True
+        msgs = [m for m in mem.short_term if m.role == "user"]
+        assert len(msgs) == 1
+        assert msgs[0].content == "hello in session"
+
+    @pytest.mark.asyncio
+    async def test_load_nonexistent_session(self, mem):
+        ok = await mem.load_session("nonexistent")
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_delete_session(self, mem):
+        sid = await mem.create_session("to_delete")
+        mem.add_message("user", "test message")
+        await mem._flush_pending()
+
+        ok = await mem.delete_session(sid)
+        assert ok is True
+        sessions = await mem.list_sessions()
+        assert len(sessions) == 0
+        assert mem.get_active_session() is None
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_session(self, mem):
+        ok = await mem.delete_session("nonexistent")
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_messages_have_session_id(self, mem):
+        sid = await mem.create_session("with_msgs")
+        mem.add_message("user", "user msg")
+        mem.add_message("assistant", "assistant msg")
+        await mem._flush_pending()
+
+        # Load session in a new mem instance
+        mem2 = Memory(mem.config, mem.agent_name)
+        await mem2.init_db()
+        await mem2.load_session(sid)
+        try:
+            msgs = mem2.get_messages()
+            user_msgs = [m for m in msgs if m["role"] == "user"]
+            assert len(user_msgs) == 1
+            assert user_msgs[0]["content"] == "user msg"
+        finally:
+            await mem2.close()
+
+    @pytest.mark.asyncio
+    async def test_update_session_preview(self, mem):
+        _sid = await mem.create_session()
+        mem.add_message("user", "This is the first user message for preview")
+        await mem._flush_pending()
+        await mem.update_session_preview()
+
+        sessions = await mem.list_sessions()
+        assert sessions[0]["preview"] == "This is the first user message for preview"
+
+    @pytest.mark.asyncio
+    async def test_delete_active_session_resets(self, mem):
+        sid = await mem.create_session("active")
+        mem.add_message("system", "test system")
+        mem.add_message("user", "test user")
+        await mem._flush_pending()
+
+        ok = await mem.delete_session(sid)
+        assert ok is True
+        assert mem.get_active_session() is None
+        # Short term should only have system messages
+        for m in mem.short_term:
+            assert m.role == "system"
+
+
+class TestDanglingToolCallPruning:
+    def test_no_prune_on_clean_messages(self):
+        """Messages with no tool calls or with matched tool calls are untouched."""
+        from weather_agents.core.memory import Memory, MemoryConfig
+
+        mem = Memory(MemoryConfig(db_path=":memory:", max_persisted_messages=100), "test")
+        mem.short_term = [
+            Message(role="system", content="base"),
+            Message(role="user", content="hello"),
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[{"id": "tc_1", "function": {"name": "echo", "arguments": "{}"}}],
+            ),
+            Message(role="tool", content="result", tool_call_id="tc_1"),
+            Message(role="assistant", content="done"),
+        ]
+        mem._prune_dangling_tool_calls()
+        assert len(mem.short_term) == 5
+
+    def test_prune_removes_orphaned_tool_calls(self):
+        """Assistant message with tool_calls missing responses is pruned."""
+        from weather_agents.core.memory import Memory, MemoryConfig
+
+        mem = Memory(MemoryConfig(db_path=":memory:", max_persisted_messages=100), "test")
+        mem.short_term = [
+            Message(role="system", content="base"),
+            Message(role="user", content="hello"),
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[{"id": "tc_dangle", "function": {"name": "echo", "arguments": "{}"}}],
+            ),
+            Message(role="user", content="next message"),
+        ]
+        mem._prune_dangling_tool_calls()
+        assert len(mem.short_term) == 3  # assistant removed
+        roles = [m.role for m in mem.short_term]
+        assert roles == ["system", "user", "user"]
+
+    def test_prune_partial_tool_calls(self):
+        """Assistant with mix of responded + unresponded calls is fully removed."""
+        from weather_agents.core.memory import Memory, MemoryConfig
+
+        mem = Memory(MemoryConfig(db_path=":memory:", max_persisted_messages=100), "test")
+        mem.short_term = [
+            Message(role="system", content="base"),
+            Message(role="user", content="run two"),
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    {"id": "tc_ok", "function": {"name": "read", "arguments": "{}"}},
+                    {"id": "tc_bad", "function": {"name": "write", "arguments": "{}"}},
+                ],
+            ),
+            Message(role="tool", content="ok", tool_call_id="tc_ok"),
+            # tc_bad has no response → assistant should be pruned
+            Message(role="assistant", content="after"),
+        ]
+        mem._prune_dangling_tool_calls()
+        # The assistant with mixed calls is removed
+        roles = [m.role for m in mem.short_term]
+        assert "assistant" not in roles or all(
+            m.role != "assistant" or not m.tool_calls for m in mem.short_term
+        )
+
+
 class TestMessageDataclass:
     def test_message_defaults(self):
         msg = Message(role="user", content="hello")

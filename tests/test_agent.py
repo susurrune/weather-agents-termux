@@ -244,3 +244,213 @@ class TestSkillSystem:
         status = agent.get_status()
         assert "skills" in status
         assert len(status["skills"]) == 1
+
+
+class TestSystemPromptLanguage:
+    def test_default_language_is_zh_prompt(self, app_config, mock_llm, bus, tool_registry):
+        from weather_agents.agents.fog import FogAgent
+
+        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
+        prompt = agent._resolve_system_prompt()
+        assert "雾" in prompt
+        assert "Fog" not in prompt or "drifting" not in prompt.lower()
+
+    def test_english_language_selects_en_prompt(self, app_config, mock_llm, bus, tool_registry):
+        from weather_agents.agents.fog import FogAgent
+
+        app_config.llm.language = "en"
+        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
+        prompt = agent._resolve_system_prompt()
+        assert "drifting" in prompt.lower()
+
+    def test_all_agents_have_english_prompt(self):
+        from weather_agents.agents.dew import DewAgent
+        from weather_agents.agents.fog import FogAgent
+        from weather_agents.agents.frost import FrostAgent
+        from weather_agents.agents.rain import RainAgent
+        from weather_agents.agents.snow import SnowAgent
+
+        for cls in (FogAgent, RainAgent, FrostAgent, SnowAgent, DewAgent):
+            assert hasattr(cls, "system_prompt_en"), f"{cls.__name__} missing system_prompt_en"
+            assert len(cls.system_prompt_en) > 50, f"{cls.__name__} system_prompt_en too short"
+
+
+class TestSkillHandlerInjection:
+    @pytest.mark.asyncio
+    async def test_skill_handler_registers_tools(self, app_config, mock_llm, bus, tool_registry):
+        """Activating a skill with a handler should register custom tools."""
+        from weather_agents.core.skill import Skill, SkillRegistry
+
+        reg = SkillRegistry()
+        # Simulate a skill with handler tool injection
+        from weather_agents.core.tool import Tool, ToolParameter
+
+        def _inject(agent, registry):
+            t = Tool(
+                name="custom_tool",
+                description="A handler-injected tool",
+                parameters=[ToolParameter(name="arg", type="string", description="an argument")],
+                handler=lambda **kw: "custom result",
+            )
+            registry.register(t)
+            return [t]
+
+        reg.register(
+            Skill(
+                name="handler_skill",
+                description="Skill with handler",
+                system_prompt="handler skill prompt",
+                required_tools=["read_file"],
+                handler=_inject,
+            )
+        )
+
+        from weather_agents.agents.fog import FogAgent
+
+        agent = FogAgent(
+            config=app_config,
+            llm=mock_llm,
+            bus=bus,
+            tool_registry=tool_registry,
+            skill_registry=reg,
+        )
+        await agent.init()
+
+        assert "custom_tool" not in tool_registry.list_names()
+
+        ok = agent.activate_skill("handler_skill")
+        assert ok is True
+        assert "custom_tool" in tool_registry.list_names()
+
+        # Deactivate should remove the injected tool
+        agent.deactivate_skill("handler_skill")
+        assert "custom_tool" not in tool_registry.list_names()
+        await agent.close()
+
+    @pytest.mark.asyncio
+    async def test_deactivate_all_cleans_handler_tools(
+        self, app_config, mock_llm, bus, tool_registry
+    ):
+        """Deactivate all skills should remove all handler-injected tools."""
+        from weather_agents.core.skill import Skill, SkillRegistry
+        from weather_agents.core.tool import Tool
+
+        reg = SkillRegistry()
+
+        def _inject_a(agent, registry):
+            t = Tool(name="tool_a", description="A", handler=lambda **kw: "a")
+            registry.register(t)
+            return [t]
+
+        def _inject_b(agent, registry):
+            t = Tool(name="tool_b", description="B", handler=lambda **kw: "b")
+            registry.register(t)
+            return [t]
+
+        reg.register(Skill(name="skill_a", description="A", handler=_inject_a))
+        reg.register(Skill(name="skill_b", description="B", handler=_inject_b))
+
+        from weather_agents.agents.fog import FogAgent
+
+        agent = FogAgent(
+            config=app_config,
+            llm=mock_llm,
+            bus=bus,
+            tool_registry=tool_registry,
+            skill_registry=reg,
+        )
+        await agent.init()
+
+        agent.activate_skill("skill_a")
+        agent.activate_skill("skill_b")
+        assert "tool_a" in tool_registry.list_names()
+        assert "tool_b" in tool_registry.list_names()
+
+        agent.deactivate_all_skills()
+        assert "tool_a" not in tool_registry.list_names()
+        assert "tool_b" not in tool_registry.list_names()
+        await agent.close()
+
+
+class TestSkillMarkdownLoading:
+    def test_from_markdown_valid(self, tmp_path):
+        from weather_agents.core.skill import Skill
+
+        md_file = tmp_path / "test_skill.md"
+        md_file.write_text("""---
+name: md_skill
+description: A skill loaded from markdown
+tools:
+  - read_file
+  - web_search
+---
+
+## Skill: MD Skill
+
+This is the system prompt body.
+It can have multiple lines.
+""")
+        skill = Skill.from_markdown(md_file)
+        assert skill is not None
+        assert skill.name == "md_skill"
+        assert skill.description == "A skill loaded from markdown"
+        assert skill.required_tools == ["read_file", "web_search"]
+        assert "## Skill: MD Skill" in skill.system_prompt
+        assert "system prompt body" in skill.system_prompt
+
+    def test_from_markdown_no_frontmatter(self, tmp_path):
+        from weather_agents.core.skill import Skill
+
+        md_file = tmp_path / "no_fm.md"
+        md_file.write_text("Just some text without frontmatter.")
+        skill = Skill.from_markdown(md_file)
+        assert skill is None
+
+    def test_load_skills_from_directory(self, tmp_path):
+        from weather_agents.core.skill import SkillRegistry
+
+        (tmp_path / "skill_a.md").write_text("""---
+name: skill_a
+description: First skill
+tools:
+  - tool_a
+---
+Body A
+""")
+        (tmp_path / "skill_b.md").write_text("""---
+name: skill_b
+description: Second skill
+---
+Body B
+""")
+        (tmp_path / "_private.md").write_text("""---
+name: private
+description: Should be skipped
+---
+Body
+""")
+
+        reg = SkillRegistry()
+        loaded = reg.load_skills_from_directory(tmp_path)
+        assert len(loaded) == 2
+        assert "skill_a" in reg.list_names()
+        assert "skill_b" in reg.list_names()
+        assert "private" not in reg.list_names()
+
+    def test_load_skills_from_nonexistent_directory(self):
+        from weather_agents.core.skill import SkillRegistry
+
+        reg = SkillRegistry()
+        loaded = reg.load_skills_from_directory("/nonexistent/path/12345")
+        assert loaded == []
+
+    def test_priority_skills_have_handlers(self):
+        """Verify the 3 priority skills have handler functions."""
+        from weather_agents.skills.code_reviewer import create_skill as _cr
+        from weather_agents.skills.security_auditor import create_skill as _sa
+        from weather_agents.skills.web_research import create_skill as _wr
+
+        for factory in (_cr, _sa, _wr):
+            skill = factory()
+            assert skill.handler is not None, f"{skill.name} missing handler"
+            assert callable(skill.handler)

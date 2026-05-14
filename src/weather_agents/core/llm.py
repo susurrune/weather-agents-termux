@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
@@ -100,6 +99,20 @@ def _format_user_facing_error(model: str, err: BaseException | None) -> str:
             f"❌  {model} 不是该 provider 的有效模型 ID。\n"
             f"运行 `wa config models` 查看可用模型，或 `wa init` 重新选择。"
         )
+    # Bad request (often due to malformed message sequence from corrupted memory)
+    err_name = type(err).__name__.lower() if err else ""
+    if (
+        any(
+            kw in lowered
+            for kw in ("bad request", "invalid_request", "tool_calls", "tool messages")
+        )
+        or "badrequest" in err_name
+    ):
+        short = text.splitlines()[0][:200]
+        return (
+            f"❌  {model} 调用失败 (Bad Request)：{short}\n"
+            f"会话消息序列可能损坏，可运行 `wa memory clear` 清理后重试。"
+        )
     # Generic fallback — short, no stack trace, no LiteLLM banner.
     short = text.splitlines()[0][:200]
     return f"❌  {model} 调用失败：{short}"
@@ -175,6 +188,17 @@ class LLMResponse:
     model: str = ""
     usage: dict = field(default_factory=dict)
     cost: float = 0.0
+    reasoning_content: str | None = None
+
+
+@dataclass
+class StreamEvent:
+    """A single event in a streaming LLM response."""
+
+    type: Literal["content", "tool_call", "done", "error"]
+    text: str = ""
+    tool_call: dict | None = None
+    usage: dict | None = None
 
 
 class LLMClient:
@@ -267,13 +291,11 @@ class LLMClient:
         self._check_budget()
         model = self._get_model(agent_name)
 
-        fallback_models = [
-            m for m in _FALLBACK_CHAINS.get(model, []) if self._has_key_for_model(m)
-        ]
+        fallback_models = [m for m in _FALLBACK_CHAINS.get(model, []) if self._has_key_for_model(m)]
         models_to_try = [model] + fallback_models
 
-        last_error: Exception | None = None
-        for attempt_model in models_to_try:
+        primary_error: Exception | None = None
+        for i, attempt_model in enumerate(models_to_try):
             try:
                 self._check_budget()
                 return await self._complete_with_retry(
@@ -284,7 +306,8 @@ class LLMClient:
                     stream,
                 )
             except Exception as e:
-                last_error = e
+                if i == 0:
+                    primary_error = e
                 log.warning(
                     "llm_fallback",
                     extra={
@@ -300,12 +323,15 @@ class LLMClient:
             extra={
                 "models": models_to_try,
                 "agent": agent_name,
-                "error": str(last_error),
+                "error": str(primary_error),
             },
         )
+        # Report the primary model's error — the last fallback's error
+        # (e.g. gpt-4o-mini auth failure) is misleading when the real
+        # problem was with the primary model.
         return LLMResponse(
-            content=_format_user_facing_error(model, last_error),
-            model=models_to_try[-1],
+            content=_format_user_facing_error(model, primary_error),
+            model=model,
         )
 
     async def _complete_with_retry(
@@ -358,24 +384,25 @@ class LLMClient:
 
                 content = ""
                 tool_calls: list[dict] = []
+                reasoning_content: str | None = None
                 choice = response.choices[0]
 
                 if choice.message.content:
                     content = choice.message.content
 
+                if getattr(choice.message, "reasoning_content", None):
+                    reasoning_content = choice.message.reasoning_content
+
                 if choice.message.tool_calls:
                     for tc in choice.message.tool_calls:
-                        args = tc.function.arguments
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except json.JSONDecodeError:
-                                args = {"raw": args}
                         tool_calls.append(
                             {
                                 "id": tc.id,
-                                "name": tc.function.name,
-                                "arguments": args,
+                                "type": getattr(tc, "type", "function"),
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
                             }
                         )
 
@@ -417,6 +444,7 @@ class LLMClient:
                         prompt_tokens,
                         completion_tokens,
                     ),
+                    reasoning_content=reasoning_content,
                 )
 
             except Exception as e:
@@ -498,3 +526,114 @@ class LLMClient:
             yield f"\n[Stream timed out after {self.config.llm.timeout}s]"
         except Exception as e:
             yield f"\n[Stream error: {e}]"
+
+    async def stream_with_tools(
+        self,
+        messages: list[dict],
+        agent_name: str | None = None,
+        tools: list[str] | None = None,
+        tool_registry: Any = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream completion with tool-call awareness.
+
+        Yields StreamEvent objects:
+        - StreamEvent(type="content", text="...") for text chunks
+        - StreamEvent(type="tool_call", tool_call={...}) when a tool call is complete
+        - StreamEvent(type="done", usage={...}) at end of stream
+        """
+        self._check_budget()
+        model = self._get_model(agent_name)
+        provider, _stripped = _split_provider(model)
+
+        stream_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": self.config.llm.temperature,
+            "max_tokens": self.config.llm.max_tokens,
+            "timeout": self.config.llm.timeout,
+            "stream": True,
+        }
+        if provider:
+            stream_kwargs["custom_llm_provider"] = provider
+
+        if tools and tool_registry:
+            stream_kwargs["tools"] = tool_registry.get_schemas(tools)
+
+        try:
+            response = await litellm.acompletion(**stream_kwargs)
+        except Exception as e:
+            yield StreamEvent(type="error", text=_format_user_facing_error("(stream)", e))
+            return
+
+        full_content = ""
+        tool_call_acc: dict[int, dict[str, Any]] = {}
+        start = time.monotonic()
+
+        async with asyncio.timeout(self.config.llm.timeout):
+            async for chunk in response:
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    full_content += delta.content
+                    yield StreamEvent(type="content", text=delta.content)
+
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_call_acc:
+                            tool_call_acc[idx] = {
+                                "id": tc_delta.id or "",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        acc = tool_call_acc[idx]
+                        if tc_delta.id:
+                            acc["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                acc["function"]["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                acc["function"]["arguments"] += tc_delta.function.arguments
+
+                # Emit completed tool calls (when we have both id and name)
+                done_indices = []
+                for idx, tc in tool_call_acc.items():
+                    if tc["id"] and tc["function"]["name"]:
+                        done_indices.append(idx)
+                        yield StreamEvent(
+                            type="tool_call",
+                            tool_call={
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": tc["function"],
+                            },
+                        )
+                for idx in done_indices:
+                    del tool_call_acc[idx]
+
+        elapsed = time.monotonic() - start
+        prompt_tokens = 0
+        completion_tokens = 0
+        try:
+            prompt_tokens = int(litellm.token_counter(model=model, messages=messages))
+            completion_tokens = int(
+                litellm.token_counter(
+                    model=model,
+                    messages=[{"role": "assistant", "content": full_content}],
+                )
+            )
+        except Exception:
+            prompt_tokens = max(1, len(str(messages)) // 4)
+            completion_tokens = max(1, len(full_content) // 4)
+        self._track_usage(agent_name, model, prompt_tokens, completion_tokens)
+        log_event(
+            log,
+            "llm_stream",
+            model=model,
+            agent=agent_name,
+            duration_ms=round(elapsed * 1000),
+            chars=len(full_content),
+        )
+        yield StreamEvent(
+            type="done",
+            usage={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+        )

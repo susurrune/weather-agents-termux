@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ class Message:
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: list[dict] | None = None
+    reasoning_content: str | None = None
 
 
 class Memory:
@@ -39,6 +42,7 @@ class Memory:
         self._db: aiosqlite.Connection | None = None
         self._loaded = False
         self._pending_persists: set[asyncio.Task] = set()
+        self._active_session: str | None = None
 
     async def init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +69,12 @@ class Memory:
             await self._db.execute(
                 "ALTER TABLE memories ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
             )
-        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_agent_key ON memories(agent, key)")
+        # Ensure unique index for agent+key (UPSERT support)
+        with contextlib.suppress(Exception):
+            await self._db.execute("DROP INDEX idx_agent_key")
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_key ON memories(agent, key)"
+        )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_category ON memories(agent, category)"
         )
@@ -78,6 +87,8 @@ class Memory:
                 content TEXT NOT NULL,
                 name TEXT,
                 tool_call_id TEXT,
+                tool_calls TEXT,
+                reasoning_content TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -85,27 +96,121 @@ class Memory:
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_agent ON messages(agent, created_at)"
         )
+        with contextlib.suppress(Exception):
+            await self._db.execute("ALTER TABLE messages ADD COLUMN tool_calls TEXT")
+        with contextlib.suppress(Exception):
+            await self._db.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT")
+        with contextlib.suppress(Exception):
+            await self._db.execute("ALTER TABLE messages ADD COLUMN session_id TEXT")
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                agent TEXT NOT NULL,
+                name TEXT,
+                preview TEXT DEFAULT '',
+                message_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent, updated_at DESC)"
+        )
         await self._db.commit()
         await self._load_short_term()
 
     async def _load_short_term(self) -> None:
         if not self._db or self._loaded:
             return
-        cursor = await self._db.execute(
-            "SELECT role, content, name, tool_call_id FROM messages "
-            "WHERE agent = ? ORDER BY created_at DESC LIMIT ?",
-            (self.agent_name, self.config.short_term_limit),
-        )
+        if self._active_session:
+            cursor = await self._db.execute(
+                "SELECT role, content, name, tool_call_id, tool_calls, reasoning_content FROM messages "
+                "WHERE agent = ? AND session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (self.agent_name, self._active_session, self.config.short_term_limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT role, content, name, tool_call_id, tool_calls, reasoning_content FROM messages "
+                "WHERE agent = ? ORDER BY created_at DESC LIMIT ?",
+                (self.agent_name, self.config.short_term_limit),
+            )
         rows = await cursor.fetchall()
         for row in reversed(list(rows)):
+            tool_calls = None
+            if len(row) > 4 and row[4]:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    tool_calls = json.loads(row[4])
+            reasoning_content = None
+            if len(row) > 5 and row[5]:
+                reasoning_content = row[5]
             self.short_term.append(
-                Message(role=row[0], content=row[1], name=row[2], tool_call_id=row[3])
+                Message(
+                    role=row[0],
+                    content=row[1],
+                    name=row[2],
+                    tool_call_id=row[3],
+                    tool_calls=tool_calls,
+                    reasoning_content=reasoning_content,
+                )
             )
         self._loaded = True
+        self._prune_dangling_tool_calls()
+
+    def _prune_dangling_tool_calls(self) -> None:
+        """Remove assistant messages whose tool_calls lack matching tool responses.
+
+        This prevents the LLM from receiving incomplete tool-call chains that
+        were persisted from a previous interrupted session.
+        """
+        if not self.short_term:
+            return
+
+        # Collect all tool_call_ids that have responses
+        responded_ids: set[str] = set()
+        for msg in self.short_term:
+            if msg.role == "tool" and msg.tool_call_id:
+                responded_ids.add(msg.tool_call_id)
+
+        # Find orphaned tool_call_ids (referenced by assistant but never responded to)
+        orphan_ids: set[str] = set()
+        for msg in self.short_term:
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tc_id = tc.get("id")
+                    if tc_id and tc_id not in responded_ids:
+                        orphan_ids.add(tc_id)
+
+        if not orphan_ids:
+            return
+
+        # Remove assistant messages with any orphaned tool calls,
+        # and tool messages that reference orphaned calls
+        pruned: list[Message] = []
+        for msg in self.short_term:
+            if (
+                msg.role == "assistant"
+                and msg.tool_calls
+                and any(tc.get("id") in orphan_ids for tc in msg.tool_calls)
+            ):
+                continue
+            if msg.role == "tool" and msg.tool_call_id in orphan_ids:
+                continue
+            pruned.append(msg)
+        self.short_term = pruned
 
     async def _flush_pending(self) -> None:
         if self._pending_persists:
-            await asyncio.gather(*self._pending_persists, return_exceptions=True)
+            results = await asyncio.gather(*self._pending_persists, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    from weather_agents.core.logger import get_logger
+
+                    get_logger("memory").warning(
+                        "flush_persist_failed",
+                        extra={"agent": self.agent_name, "error": str(r)},
+                    )
             self._pending_persists.clear()
         if self._db:
             with contextlib.suppress(Exception):
@@ -124,6 +229,10 @@ class Memory:
             msg.name = kwargs["name"]
         if "tool_call_id" in kwargs:
             msg.tool_call_id = kwargs["tool_call_id"]
+        if "tool_calls" in kwargs and kwargs["tool_calls"]:
+            msg.tool_calls = kwargs["tool_calls"]
+        if "reasoning_content" in kwargs and kwargs["reasoning_content"]:
+            msg.reasoning_content = kwargs["reasoning_content"]
         self.short_term.append(msg)
 
         if len(self.short_term) > self.config.short_term_limit:
@@ -138,8 +247,18 @@ class Memory:
             except RuntimeError:
                 # No event loop — skip persistence rather than crash sync callers.
                 return
+            tool_calls_json = json.dumps(msg.tool_calls) if msg.tool_calls else None
+            session_id = self._active_session
             task = loop.create_task(
-                self._persist_message(role, content, msg.name, msg.tool_call_id)
+                self._persist_message(
+                    role,
+                    content,
+                    msg.name,
+                    msg.tool_call_id,
+                    tool_calls_json,
+                    msg.reasoning_content,
+                    session_id,
+                )
             )
             self._pending_persists.add(task)
             task.add_done_callback(self._pending_persists.discard)
@@ -150,16 +269,50 @@ class Memory:
         content: str,
         name: str | None,
         tool_call_id: str | None,
+        tool_calls: str | None = None,
+        reasoning_content: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         if not self._db:
             return
         try:
             await self._db.execute(
-                "INSERT INTO messages (agent, role, content, name, tool_call_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (self.agent_name, role, content, name, tool_call_id),
+                "INSERT INTO messages (agent, role, content, name, tool_call_id, tool_calls, reasoning_content, session_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    self.agent_name,
+                    role,
+                    content,
+                    name,
+                    tool_call_id,
+                    tool_calls,
+                    reasoning_content,
+                    session_id,
+                ),
             )
+            if session_id:
+                await self._db.execute(
+                    "UPDATE sessions SET message_count = message_count + 1, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (session_id,),
+                )
             await self._db.commit()
+            # Auto-prune old messages beyond max_persisted_messages
+            max_persisted = getattr(self.config, "max_persisted_messages", 1000)
+            cursor = await self._db.execute(
+                "SELECT COUNT(*) FROM messages WHERE agent = ? AND role != 'system'",
+                (self.agent_name,),
+            )
+            row = await cursor.fetchone()
+            if row and row[0] > max_persisted:
+                excess = row[0] - max_persisted
+                await self._db.execute(
+                    "DELETE FROM messages WHERE id IN ("
+                    "SELECT id FROM messages WHERE agent = ? AND role != 'system' "
+                    "ORDER BY created_at ASC LIMIT ?)",
+                    (self.agent_name, excess),
+                )
+                await self._db.commit()
         except Exception as e:
             from weather_agents.core.logger import get_logger
 
@@ -176,6 +329,10 @@ class Memory:
                 d["name"] = m.name
             if m.tool_call_id:
                 d["tool_call_id"] = m.tool_call_id
+            if m.tool_calls:
+                d["tool_calls"] = m.tool_calls
+            if m.reasoning_content:
+                d["reasoning_content"] = m.reasoning_content
             msgs.append(d)
         return msgs
 
@@ -215,22 +372,12 @@ class Memory:
     async def remember(self, key: str, value: Any, category: str = "general") -> None:
         if not self._db:
             return
-        existing = await self._db.execute(
-            "SELECT id FROM memories WHERE agent = ? AND key = ?",
-            (self.agent_name, key),
+        await self._db.execute(
+            "INSERT INTO memories (agent, key, value, category) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(agent, key) DO UPDATE SET "
+            "value = excluded.value, category = excluded.category, updated_at = CURRENT_TIMESTAMP",
+            (self.agent_name, key, json.dumps(value, ensure_ascii=False), category),
         )
-        row = await existing.fetchone()
-        if row:
-            await self._db.execute(
-                "UPDATE memories SET value = ?, category = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE agent = ? AND key = ?",
-                (json.dumps(value, ensure_ascii=False), category, self.agent_name, key),
-            )
-        else:
-            await self._db.execute(
-                "INSERT INTO memories (agent, key, value, category) VALUES (?, ?, ?, ?)",
-                (self.agent_name, key, json.dumps(value, ensure_ascii=False), category),
-            )
         await self._db.commit()
 
     async def recall(
@@ -267,6 +414,106 @@ class Memory:
             (self.agent_name, key),
         )
         await self._db.commit()
+
+    # -- Session management --
+
+    def get_active_session(self) -> str | None:
+        return self._active_session
+
+    async def create_session(self, name: str | None = None) -> str:
+        session_id = uuid.uuid4().hex[:12]
+        preview = name or ""
+        if not self._db:
+            return session_id
+        await self._db.execute(
+            "INSERT INTO sessions (id, agent, name, preview) VALUES (?, ?, ?, ?)",
+            (session_id, self.agent_name, name, preview),
+        )
+        await self._db.commit()
+        self._active_session = session_id
+        self.short_term = [m for m in self.short_term if m.role == "system"]
+        self._loaded = True
+        return session_id
+
+    async def list_sessions(self) -> list[dict]:
+        if not self._db:
+            return []
+        cursor = await self._db.execute(
+            "SELECT id, agent, name, preview, message_count, created_at, updated_at "
+            "FROM sessions WHERE agent = ? ORDER BY updated_at DESC LIMIT 50",
+            (self.agent_name,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "agent": r[1],
+                "name": r[2],
+                "preview": r[3],
+                "message_count": r[4],
+                "created_at": r[5],
+                "updated_at": r[6],
+            }
+            for r in rows
+        ]
+
+    async def load_session(self, session_id: str) -> bool:
+        if not self._db:
+            return False
+        cursor = await self._db.execute(
+            "SELECT id FROM sessions WHERE id = ? AND agent = ?",
+            (session_id, self.agent_name),
+        )
+        if not await cursor.fetchone():
+            return False
+        self._active_session = session_id
+        self.short_term = [m for m in self.short_term if m.role == "system"]
+        self._loaded = False
+        await self._load_short_term()
+        return True
+
+    async def delete_session(self, session_id: str) -> bool:
+        if not self._db:
+            return False
+        cursor = await self._db.execute(
+            "SELECT id FROM sessions WHERE id = ? AND agent = ?",
+            (session_id, self.agent_name),
+        )
+        if not await cursor.fetchone():
+            return False
+        await self._db.execute(
+            "DELETE FROM messages WHERE agent = ? AND session_id = ?",
+            (self.agent_name, session_id),
+        )
+        await self._db.execute(
+            "DELETE FROM sessions WHERE id = ? AND agent = ?",
+            (session_id, self.agent_name),
+        )
+        await self._db.commit()
+        if self._active_session == session_id:
+            self._active_session = None
+            self.short_term = [m for m in self.short_term if m.role == "system"]
+            self._loaded = False
+            await self._load_short_term()
+        return True
+
+    async def update_session_preview(self) -> None:
+        """Set preview from the first user message in the active session."""
+        if not self._db or not self._active_session:
+            return
+        cursor = await self._db.execute(
+            "SELECT content FROM messages WHERE agent = ? AND session_id = ? AND role = 'user' "
+            "ORDER BY created_at ASC LIMIT 1",
+            (self.agent_name, self._active_session),
+        )
+        row = await cursor.fetchone()
+        if row:
+            preview = row[0][:80]
+            await self._db.execute(
+                "UPDATE sessions SET preview = ? WHERE id = ?",
+                (preview, self._active_session),
+            )
+            await self._db.commit()
 
     async def get_memory_stats(self) -> dict:
         """Return statistics about long-term memory."""

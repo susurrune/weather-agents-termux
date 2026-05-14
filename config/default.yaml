@@ -1,5 +1,10 @@
 # Weather Agents 默认配置
 
+# 工作空间 — 智能体生成内容的存放目录
+# "auto" = 自动选择剩余空间最大的盘符 (多盘时跳过 C:)
+workspace:
+  path: "auto"
+
 # 全局 LLM 设置
 llm:
   default_model: "deepseek/deepseek-v4-flash"

@@ -6,6 +6,7 @@ Avoids duplication between CLI and web entry points.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +24,7 @@ from weather_agents.core.logger import get_logger
 from weather_agents.core.mcp import MCPManager
 from weather_agents.core.skill import global_skill_registry
 from weather_agents.core.tool import global_registry
+from weather_agents.core.workspace import init_workspace, resolve_workspace_path
 from weather_agents.plugins.loader import PluginLoader
 from weather_agents.skills.loader import register_all_skills
 from weather_agents.tools.builtin import register_builtin_tools
@@ -45,6 +47,14 @@ AGENT_EMOJI = {
     "dew": "💧",
 }
 
+AGENT_COLORS: dict[str, str] = {
+    "fog": "bright_white",
+    "rain": "blue",
+    "frost": "cyan",
+    "snow": "bright_white",
+    "dew": "green",
+}
+
 
 @dataclass
 class SystemContext:
@@ -54,6 +64,7 @@ class SystemContext:
     bus: MessageBus
     llm: LLMClient
     agent_map: dict[str, BaseAgent]
+    workspace_path: str = ""
     mcp: MCPManager | None = None
     mcp_status: list[str] = field(default_factory=list)
 
@@ -86,6 +97,11 @@ class SystemContext:
 def create_system_context() -> SystemContext:
     """Bootstrap the full system: config, bus, LLM, tools, skills, plugins, agents."""
     config = load_config()
+    workspace_root = resolve_workspace_path(config.workspace.path)
+    init_workspace(workspace_root)
+    workspace_path = str(workspace_root.resolve())
+    _log.info("workspace: %s", workspace_path)
+
     bus = MessageBus()
     register_builtin_tools()
     register_all_skills()
@@ -118,6 +134,7 @@ def create_system_context() -> SystemContext:
         bus=bus,
         llm=llm,
         agent_map=agents,
+        workspace_path=workspace_path,
         mcp=mcp_manager,
     )
 
@@ -137,6 +154,11 @@ async def orchestrate_task(
     goal: str,
     agent_map: dict[str, BaseAgent],
     snow: BaseAgent | None = None,
+    *,
+    on_task_start: Callable[[Any], Awaitable[None]] | None = None,
+    on_task_done: Callable[[Any, TaskExecutionResult], Awaitable[None]] | None = None,
+    result_truncate: int | None = 500,
+    summary_prompt_template: str = "",
 ) -> tuple[list[Any], list[TaskExecutionResult], str]:
     """Orchestrate a multi-agent task: plan -> execute -> summarize.
 
@@ -172,6 +194,8 @@ async def orchestrate_task(
                     success=False,
                     content=f"Agent '{t.assigned_to}' not found",
                 )
+            if on_task_start:
+                await on_task_start(t)
             a_task = AgentTask(
                 id=t.id,
                 description=t.description,
@@ -179,13 +203,19 @@ async def orchestrate_task(
                 metadata=t.metadata,
             )
             result = await agent.execute_task(a_task)
-            return TaskExecutionResult(
+            tr = result.content
+            if result_truncate is not None and len(tr) > result_truncate:
+                tr = tr[:result_truncate]
+            r = TaskExecutionResult(
                 id=t.id,
                 agent=t.assigned_to or "",
                 description=t.description,
                 success=result.success,
-                content=result.content[:500],
+                content=tr,
             )
+            if on_task_done:
+                await on_task_done(t, r)
+            return r
 
         batch_results = await asyncio.gather(*[_execute_one(t) for t in ready])
         for r in batch_results:
@@ -196,7 +226,8 @@ async def orchestrate_task(
 
     # Generate summary
     if results:
-        summary_prompt = "请汇总以下所有子任务的执行结果：\n\n"
+        tpl = summary_prompt_template or "请汇总以下所有子任务的执行结果：\n\n"
+        summary_prompt = tpl
         for r in results:
             status = "成功" if r.success else "失败"
             summary_prompt += f"## 任务 {r.id} ({r.agent}) - {status}\n{r.content[:300]}\n\n"

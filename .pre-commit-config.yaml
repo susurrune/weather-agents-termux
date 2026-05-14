@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.10
+    hooks:
+      - id: ruff
+        name: ruff-lint
+        args: [--fix]
+      - id: ruff-format
+        name: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        name: mypy-type-check
+        args: [--strict, --ignore-missing-imports]
+        additional_dependencies:
+          - typer>=0.15
+          - rich>=13.0
+          - pyyaml>=6.0
+          - httpx>=0.28
+          - litellm>=1.60

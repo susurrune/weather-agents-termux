@@ -159,3 +159,17 @@ class TestToolRegistry:
         r.register(t1)
         r.register(t2)
         assert r.get("t").description == "v2"
+
+    def test_unregister(self):
+        r = ToolRegistry()
+        r.register(Tool(name="temp", description="Temporary"))
+        assert r.get("temp") is not None
+
+        removed = r.unregister("temp")
+        assert removed is True
+        assert r.get("temp") is None
+
+    def test_unregister_nonexistent(self):
+        r = ToolRegistry()
+        removed = r.unregister("nonexistent")
+        assert removed is False

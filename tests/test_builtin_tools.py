@@ -112,22 +112,22 @@ class TestShellExec:
 
 class TestWebSearch:
     @pytest.mark.asyncio
-    async def test_parse_ddg_results(self):
-        from weather_agents.tools.builtin import _parse_ddg_results
+    async def test_parse_ddg_html(self):
+        from weather_agents.tools.builtin import _parse_ddg_html
 
         html = """
         <a class="result__a" href="http://example.com">Example Title</a>
         <a class="result__snippet">This is a snippet</a>
         """
-        results = _parse_ddg_results(html, 5)
+        results = _parse_ddg_html(html, 5)
         assert len(results) == 1
         assert results[0]["title"] == "Example Title"
 
     @pytest.mark.asyncio
     async def test_parse_ddg_empty(self):
-        from weather_agents.tools.builtin import _parse_ddg_results
+        from weather_agents.tools.builtin import _parse_ddg_html
 
-        results = _parse_ddg_results("<html>no results</html>", 5)
+        results = _parse_ddg_html("<html>no results</html>", 5)
         assert results == []
 
 

@@ -6,6 +6,7 @@ import asyncio
 import os
 import sys
 import time
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -13,6 +14,7 @@ from rich.console import Console
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
@@ -27,7 +29,18 @@ from weather_agents.core.config import (
     load_model_catalog,
     set_config,
 )
-from weather_agents.core.factory import AGENT_CLASSES, AGENT_EMOJI, create_system_context
+from weather_agents.core.factory import (
+    AGENT_CLASSES,
+    AGENT_COLORS,
+    AGENT_EMOJI,
+    create_system_context,
+)
+from weather_agents.core.workspace import (
+    detect_best_workspace_root,
+    format_bytes,
+    init_workspace,
+    resolve_workspace_path,
+)
 
 app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=True)
 console = Console()
@@ -94,14 +107,17 @@ async def _interactive(agent_name: str | None = None) -> None:
         current = agent_name or "fog"
         agent = agents[current]
         model = ctx.config.llm.default_model
-        _print_welcome(model)
+        ws = getattr(ctx, "workspace_path", "")
+        workspace_path = ws if isinstance(ws, str) else ""
+        _print_welcome(model, workspace_path)
 
         while True:
             console.print()
             try:
+                color = AGENT_COLORS.get(agent.name, "cyan")
                 prompt = Text()
-                prompt.append(f"{agent.emoji} ", style="bold")
-                prompt.append(f"{agent.display_name}", style="bold cyan")
+                prompt.append(f"{agent.emoji} ", style=f"bold {color}")
+                prompt.append(f"{agent.display_name}", style=f"bold {color}")
                 prompt.append(" > ", style="dim")
                 inp = console.input(prompt)
             except (EOFError, KeyboardInterrupt):
@@ -121,7 +137,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 continue
             if cmd_lower == "/clear":
                 console.clear()
-                _print_welcome(ctx.config.llm.default_model)
+                _print_welcome(ctx.config.llm.default_model, workspace_path)
                 continue
             if cmd_lower == "/status":
                 _print_status(agents)
@@ -167,6 +183,21 @@ async def _interactive(agent_name: str | None = None) -> None:
                 agent.deactivate_all_skills()
                 console.print("  [dim]skills deactivated[/dim]")
                 continue
+            if cmd_lower == "/workspace":
+                _print_workspace(ctx)
+                continue
+            if cmd_lower.startswith("/workspace set "):
+                _handle_workspace_set(cmd, ctx)
+                continue
+            if cmd_lower == "/workspace auto":
+                _handle_workspace_auto(ctx)
+                continue
+            if cmd_lower == "/sessions":
+                await _print_sessions(agent)
+                continue
+            if cmd_lower.startswith("/session "):
+                await _handle_session_command(cmd, agent)
+                continue
             if cmd_lower.startswith("/task "):
                 goal = cmd[6:].strip()
                 if goal:
@@ -184,45 +215,57 @@ async def _interactive(agent_name: str | None = None) -> None:
             if cmd_lower.lstrip("/") in AGENT_CLASSES:
                 current = cmd_lower.lstrip("/")
                 agent = agents[current]
+                color = AGENT_COLORS.get(current, "white")
                 console.print(
-                    f"  [dim]switched to[/dim] {agent.emoji} [bold]{agent.display_name}[/bold]"
+                    f"  [dim]switched to[/dim] {agent.emoji} [bold {color}]{agent.display_name}[/bold {color}]"
                 )
                 continue
             if cmd_lower.startswith("/"):
                 _print_help()
                 continue
 
-            # --- Spinner-based chat (no streaming) ---
+            # --- Streaming chat with tool-call support ---
             t0 = time.monotonic()
             console.print()
+            color = AGENT_COLORS.get(agent.name, "white")
             interrupted = False
-            status_handle = console.status(
-                f"[dim]{agent.emoji} thinking...[/dim]",
-                spinner="dots",
-            )
-            status_handle.start()
+            md_content = ""
 
-            def _on_status(msg: str, _sh=status_handle, _ag=agent) -> None:
-                _sh.update(f"[dim]{_ag.emoji} {msg}[/dim]")
+            live = Live(
+                Text("", style="dim"),
+                console=console,
+                refresh_per_second=10,
+                transient=False,
+            )
+            live.start()
 
             try:
-                resp = await agent.chat(inp, on_status=_on_status)
+                async for event in agent.chat_stream(inp):
+                    if event["type"] == "content":
+                        md_content += event["text"]
+                        live.update(Markdown(md_content))
+                    elif event["type"] == "tool_status":
+                        live.update(
+                            Markdown(f"{md_content}\n\n*{agent.emoji} {event['label']}...*")
+                        )
+                    elif event["type"] == "done":
+                        break
             except KeyboardInterrupt:
                 interrupted = True
-                resp = ""
             finally:
-                status_handle.stop()
+                live.stop()
 
             elapsed = time.monotonic() - t0
 
-            if not resp.strip():
+            if not md_content.strip():
                 if interrupted:
                     console.print("  [dim yellow]interrupted[/dim yellow]")
                 else:
                     console.print("  [red]no response[/red]")
                 continue
 
-            _print_response(agent, resp, elapsed, interrupted)
+            # Print final formatted response
+            _print_response(agent, md_content, elapsed, interrupted)
 
     finally:
         console.print("\n  [dim]bye[/dim]")
@@ -235,28 +278,32 @@ def _print_response(
     elapsed: float,
     interrupted: bool = False,
 ) -> None:
-    """Print a finalized response with metadata footer."""
+    """Print a finalized response with color-coded agent header and footer."""
+    color = AGENT_COLORS.get(agent.name, "white")
+
+    # ── Header ──
     header = Text()
-    header.append(f"  {agent.emoji} ", style="bold")
-    header.append(agent.display_name, style="bold")
+    header.append(f"  {agent.emoji} ", style=f"bold {color}")
+    header.append(agent.display_name, style=f"bold {color}")
     console.print(header)
 
-    # Render as markdown for code blocks, lists, etc.
+    # ── Content ──
     md = Markdown(content)
     console.print(md, width=min(console.width, 100))
 
-    # Footer: timing + interrupt notice
+    # ── Footer ──
     footer = Text("  ")
     footer.append(f"{elapsed:.1f}s", style="dim")
     if interrupted:
         footer.append("  (interrupted)", style="dim yellow")
     console.print(footer)
+    console.print()
 
 
 # -- Welcome & Help --------------------------------------------------------
 
 
-def _print_welcome(model: str) -> None:
+def _print_welcome(model: str, workspace_path: str = "") -> None:
     console.print()
     logo = (
         "[bold bright_white]"
@@ -270,11 +317,11 @@ def _print_welcome(model: str) -> None:
     console.print(logo, justify="center")
 
     agents_info = [
-        ("\U0001f32b", "雾", "Fog", "探索研究", "bright_white", "~ ~ ~"),
-        ("\U0001f327", "雨", "Rain", "生成创造", "blue", "' ' '"),
-        ("❄", "霜", "Frost", "审查优化", "cyan", "* + *"),
-        ("\U0001f328", "雪", "Snow", "规划编排", "bright_white", ". * ."),
-        ("\U0001f4a7", "露", "Dew", "运维集成", "green", "o o o"),
+        ("\U0001f32b", "雾", "Fog", "探索研究", AGENT_COLORS["fog"], "~ ~ ~"),
+        ("\U0001f327", "雨", "Rain", "生成创造", AGENT_COLORS["rain"], "' ' '"),
+        ("❄", "霜", "Frost", "审查优化", AGENT_COLORS["frost"], "* + *"),
+        ("\U0001f328", "雪", "Snow", "规划编排", AGENT_COLORS["snow"], ". * ."),
+        ("\U0001f4a7", "露", "Dew", "运维集成", AGENT_COLORS["dew"], "o o o"),
     ]
 
     tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
@@ -303,6 +350,10 @@ def _print_welcome(model: str) -> None:
     status_line.append("  model: ", style="dim")
     status_line.append(model, style="cyan")
     status_line.append("  |  ", style="dim")
+    if workspace_path:
+        status_line.append("workspace: ", style="dim")
+        status_line.append(workspace_path, style="magenta")
+        status_line.append("  |  ", style="dim")
     status_line.append(f"v{__version__}", style="dim")
     status_line.append("  |  ", style="dim")
     status_line.append("/help", style="bold dim")
@@ -326,6 +377,9 @@ def _print_help() -> None:
                 ("/model [name]", "view or switch model"),
                 ("/model <agent> <model>", "per-agent model"),
                 ("/apikey", "manage API keys"),
+                ("/workspace", "view workspace info"),
+                ("/workspace set <path>", "set custom workspace"),
+                ("/workspace auto", "reset to auto-detect"),
             ],
         ),
         (
@@ -350,8 +404,12 @@ def _print_help() -> None:
         (
             "Session",
             [
-                ("/memory", "memory stats (alias for `wa memory status`)"),
-                ("/memory clear", "clear all short-term memory"),
+                ("/sessions", "list saved sessions"),
+                ("/session new [name]", "start a new session"),
+                ("/session load <id>", "switch to a session"),
+                ("/session delete <id>", "delete a session"),
+                ("/memory", "memory stats"),
+                ("/memory clear", "clear short-term memory"),
                 ("/clear", "clear screen"),
                 ("/quit", "exit"),
             ],
@@ -370,18 +428,20 @@ def _print_help() -> None:
 def _print_status(agents: dict) -> None:
     console.print()
     tbl = Table(show_lines=False, box=None, padding=(0, 2, 0, 0))
-    tbl.add_column("Agent", style="cyan", width=14)
+    tbl.add_column("Agent", width=14)
     tbl.add_column("State", width=8)
     tbl.add_column("Skills", style="dim")
     tbl.add_column("Calls", justify="right")
     tbl.add_column("Tokens", justify="right")
     for a in agents.values():
         s = a.get_status()
+        name = s["name"]
+        color = AGENT_COLORS.get(name, "white")
         skills_str = ", ".join(sk["name"] for sk in s.get("skills", []) if sk.get("active")) or "-"
         state_color = "green" if s["state"] == "idle" else "yellow"
         tokens = f"{s['usage']['prompt_tokens']:,} / {s['usage']['completion_tokens']:,}"
         tbl.add_row(
-            f"{s['emoji']} {s['display_name']}",
+            f"[bold {color}]{s['emoji']} {s['display_name']}[/bold {color}]",
             f"[{state_color}]{s['state']}[/{state_color}]",
             skills_str,
             str(s["usage"]["calls"]),
@@ -491,6 +551,71 @@ async def _print_memory_status(ctx) -> None:
         )
 
 
+async def _print_sessions(agent) -> None:
+    sessions = await agent.memory.list_sessions()
+    active_id = agent.memory.get_active_session()
+    if not sessions:
+        console.print("  [dim]no saved sessions[/dim]")
+        console.print("  [dim]/session new [name]  — start a new session[/dim]")
+        return
+    console.print()
+    for s in sessions:
+        marker = " [green]*[/green]" if s["id"] == active_id else " "
+        sid = s["id"]
+        name = s["name"] or s["preview"] or "(empty)"
+        if len(name) > 50:
+            name = name[:47] + "..."
+        count = s["message_count"]
+        console.print(f" {marker} [cyan]{sid}[/cyan]  {name}  [dim]({count} msgs)[/dim]")
+    console.print()
+    console.print(
+        "  [dim]/session new [name]     start fresh session\n"
+        "  /session load <id>       switch session\n"
+        "  /session delete <id>     delete session[/dim]"
+    )
+
+
+async def _handle_session_command(cmd: str, agent) -> None:
+    parts = cmd.strip().split(maxsplit=2)
+    if len(parts) < 2:
+        await _print_sessions(agent)
+        return
+
+    action = parts[1].lower()
+
+    if action == "new":
+        name = parts[2] if len(parts) > 2 else None
+        sid = await agent.memory.create_session(name)
+        console.print(f"  [green]+ new session [cyan]{sid}[/cyan][/green]")
+        return
+
+    if action == "load":
+        if len(parts) < 3:
+            console.print("  [red]usage: /session load <id>[/red]")
+            return
+        sid = parts[2]
+        ok = await agent.memory.load_session(sid)
+        if ok:
+            console.print(f"  [green]loaded session [cyan]{sid}[/cyan][/green]")
+        else:
+            console.print(f"  [red]session not found: {sid}[/red]")
+        return
+
+    if action in ("delete", "del", "rm"):
+        if len(parts) < 3:
+            console.print("  [red]usage: /session delete <id>[/red]")
+            return
+        sid = parts[2]
+        ok = await agent.memory.delete_session(sid)
+        if ok:
+            console.print(f"  [green]deleted session [cyan]{sid}[/cyan][/green]")
+        else:
+            console.print(f"  [red]session not found: {sid}[/red]")
+        return
+
+    console.print("  [red]usage: /session [new|load|delete] ...[/red]")
+
+
 def _print_skills(agent) -> None:
     skills = agent.get_available_skills()
     if not skills:
@@ -500,6 +625,139 @@ def _print_skills(agent) -> None:
     for sk in skills:
         icon = "[green]●[/green]" if sk["active"] else "[dim]○[/dim]"
         console.print(f"  {icon}  [cyan]{sk['name']:<20}[/cyan]  [dim]{sk['description']}[/dim]")
+
+
+# -- Workspace management ----------------------------------------------------
+
+
+def _print_workspace_path() -> None:
+    """Print a table showing workspace path, drive info, and subdirectories."""
+    import shutil
+
+    cfg = load_config()
+    configured = cfg.workspace.path
+    is_auto = configured.lower() == "auto"
+    resolved = resolve_workspace_path(configured)
+    resolved_str = str(resolved.resolve())
+
+    console.print()
+    tbl = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    tbl.add_column("Key", style="dim")
+    tbl.add_column("Value")
+
+    mode = "[cyan]auto[/cyan]" if is_auto else "[yellow]custom[/yellow]"
+    tbl.add_row("mode", mode)
+
+    if is_auto:
+        detected = detect_best_workspace_root()
+        tbl.add_row("detected", str(detected))
+    else:
+        tbl.add_row("configured", configured)
+
+    tbl.add_row("resolved", resolved_str)
+
+    exists = resolved.exists()
+    status = "[green]exists[/green]" if exists else "[yellow]not created[/yellow]"
+    tbl.add_row("status", status)
+
+    # Disk info
+    try:
+        usage = shutil.disk_usage(resolved_str)
+        tbl.add_row("disk free", f"[green]{format_bytes(usage.free)}[/green]")
+        tbl.add_row("disk total", format_bytes(usage.total))
+    except OSError:
+        tbl.add_row("disk", "[red]unavailable[/red]")
+
+    # Subdirectories
+    if exists:
+        subs = []
+        for child in sorted(resolved.iterdir()):
+            if child.is_dir():
+                subs.append(f"  [dim]{child.name}/[/dim]")
+            else:
+                subs.append(f"  {child.name}")
+        if subs:
+            tbl.add_row("contents", "\n".join(subs))
+
+    console.print(tbl)
+
+    if is_auto:
+        console.print()
+        console.print(
+            "  [dim]/workspace set <path>   set custom workspace\n"
+            "  /workspace auto            reset to auto-detect[/dim]"
+        )
+
+    # Also show all drives on Windows
+    if os.name == "nt":
+        console.print()
+        console.print("  [bold dim]Available drives:[/bold dim]")
+        from weather_agents.core.workspace import _get_drive_list
+
+        for d in _get_drive_list():
+            marker = " [green]*[/green]" if str(resolved).startswith(d.path) else " "
+            bar = _free_bar(d.free_bytes, d.total_bytes)
+            console.print(
+                f" {marker} [cyan]{d.path}[/cyan]  "
+                f"[green]{format_bytes(d.free_bytes):>10} free[/green]  "
+                f"/ {format_bytes(d.total_bytes)}  {bar}"
+            )
+
+
+def _free_bar(free: int, total: int) -> str:
+    """Draw a minimal 10-char usage bar."""
+    if total <= 0:
+        return "[dim][----------][/dim]"
+    ratio = free / total
+    filled = max(1, int(ratio * 10))
+    bar = "█" * filled + "─" * (10 - filled)
+    color = "green" if ratio > 0.2 else "yellow" if ratio > 0.1 else "red"
+    return f"[{color}]{bar}[/{color}]"
+
+
+def _print_workspace(ctx) -> None:
+    _print_workspace_path()
+
+
+def _handle_workspace_set(cmd: str, ctx) -> None:
+    path_str = cmd[len("/workspace set ") :].strip()
+    if not path_str:
+        console.print("  [red]usage: /workspace set <absolute-path>[/red]")
+        return
+
+    # Resolve and validate
+    from pathlib import Path
+
+    resolved = Path(os.path.expanduser(path_str)).resolve()
+    if not resolved.is_absolute():
+        console.print("  [red]path must be absolute[/red]")
+        return
+
+    ok, msg = set_config("workspace.path", str(resolved))
+    color = "green" if ok else "red"
+    console.print(f"  [{color}]{msg}[/{color}]")
+
+    if ok:
+        # Immediately create the new workspace
+        try:
+            init_workspace(resolved)
+            console.print(f"  [green]workspace created at {resolved}[/green]")
+        except OSError as e:
+            console.print(f"  [yellow]Warning: could not create workspace: {e}[/yellow]")
+
+
+def _handle_workspace_auto(ctx) -> None:
+    ok, msg = delete_config("workspace.path")
+    color = "green" if ok else "red"
+    console.print(f"  [{color}]{msg}[/{color}]")
+
+    # Detect and create the auto workspace for display
+    root = detect_best_workspace_root()
+    try:
+        init_workspace(root)
+        console.print(f"  [green]workspace -> {root}[/green]")
+    except OSError as e:
+        console.print(f"  [yellow]Warning: {e}[/yellow]")
 
 
 # -- Model & API key management --------------------------------------------
@@ -624,13 +882,36 @@ async def _run_task(goal: str, agents=None) -> None:
         await own_ctx.init_all()
         agents = own_ctx.agent_map
 
-    snow = agents["snow"]
     emoji_map = AGENT_EMOJI
 
     try:
+        from weather_agents.core.factory import orchestrate_task
+
+        status_handles: dict[str, Any] = {}
+
+        async def _on_start(t):
+            emoji = emoji_map.get(t.assigned_to or "", "?")
+            sh = console.status(f"[dim]{emoji} {t.description}...[/dim]", spinner="dots")
+            sh.start()
+            status_handles[t.id] = sh
+
+        async def _on_done(t, r):
+            sh = status_handles.pop(t.id, None)
+            if sh:
+                sh.stop()
+            emoji = emoji_map.get(r.agent, "?")
+            icon = "[green]✓[/green]" if r.success else "[red]✗[/red]"
+            console.print(f"  {icon} {emoji} {r.description}")
+
         console.print()
         with console.status("[dim]planning...[/dim]", spinner="dots"):
-            tasks = await snow.orchestrate(goal)
+            tasks, results, summary = await orchestrate_task(
+                goal,
+                agents,
+                on_task_start=_on_start,
+                on_task_done=_on_done,
+                result_truncate=500,
+            )
 
         if not tasks:
             console.print("  [dim]no tasks generated[/dim]")
@@ -643,70 +924,21 @@ async def _run_task(goal: str, agents=None) -> None:
             console.print(f"  [dim]{t.id}.[/dim] {emoji} {t.description}{dep}")
 
         console.print()
-        from weather_agents.core.agent import Task as AgentTask
-
-        results = {}
-        for t in tasks:
-            if not t.assigned_to or t.assigned_to == "snow":
-                continue
-            a = agents.get(t.assigned_to)
-            if not a:
-                continue
-            emoji = emoji_map.get(t.assigned_to, "?")
-
-            t0 = time.monotonic()
-            status_handle = console.status(
-                f"[dim]{emoji} {t.description}...[/dim]",
-                spinner="dots",
-            )
-            status_handle.start()
-
-            def _make_cb(em, sh):
-                def _cb(msg):
-                    sh.update(f"[dim]{em} {msg}[/dim]")
-
-                return _cb
-
-            try:
-                r = await a.execute_task(
-                    AgentTask(
-                        id=t.id,
-                        description=t.description,
-                        assigned_to=t.assigned_to,
-                        metadata=t.metadata,
-                    ),
-                    on_status=_make_cb(emoji, status_handle),
-                )
-            finally:
-                status_handle.stop()
-
-            results[t.id] = r
-            elapsed = time.monotonic() - t0
-            icon = "[green]✓[/green]" if r.success else "[red]✗[/red]"
-            console.print(f"  {icon} {emoji} {t.description}  [dim]{elapsed:.1f}s[/dim]")
-
-        ok = sum(1 for r in results.values() if r.success)
+        ok = sum(1 for r in results if r.success)
         total = len(results)
         color = "green" if ok == total else "yellow" if ok > 0 else "red"
-        console.print(f"\n  [{color}]{ok}/{total} completed[/{color}]")
+        console.print(f"  [{color}]{ok}/{total} completed[/{color}]")
 
-        if results:
-            summary_prompt = "Summarize the following subtask results:\n\n"
-            for t in tasks:
-                if t.id in results:
-                    r = results[t.id]
-                    status = "OK" if r.success else "FAIL"
-                    summary_prompt += (
-                        f"## Task {t.id} ({t.assigned_to}) {status}\n{r.content[:500]}\n\n"
-                    )
+        if summary:
             console.print()
-            with console.status("[dim]summarizing...[/dim]", spinner="dots"):
-                s = await snow.chat(summary_prompt)
-
             console.print("  [bold]Summary[/bold]")
-            md = Markdown(s)
+            md = Markdown(summary)
             console.print(md, width=min(console.width, 100))
+
     finally:
+        # Clean up any lingering status handles
+        for sh in status_handles.values():
+            sh.stop()
         if own_ctx:
             await own_ctx.close_all()
 
