@@ -85,6 +85,7 @@ def format_models_for_display(catalog: dict[str, list[dict]]) -> str:
 
 _CTX_CACHE: dict[str, int] = {}
 
+
 def get_model_context_window(model_name: str) -> int:
     """Look up context window for a model. Returns 128K if unknown."""
     if not isinstance(model_name, str):
