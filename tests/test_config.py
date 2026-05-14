@@ -85,3 +85,61 @@ class TestConfigCore:
         delete_config("default_model")
         cfg = load_config()
         assert cfg.llm.default_model == "gpt-4o-mini"
+
+
+class TestConfigValidation:
+    def test_temperature_out_of_range_rejected(self):
+        from weather_agents.core.config import set_config
+
+        ok, msg = set_config("temperature", "5.0")
+        assert not ok
+        assert "temperature" in msg.lower()
+
+    def test_temperature_negative_rejected(self):
+        from weather_agents.core.config import set_config
+
+        ok, msg = set_config("temperature", "-0.5")
+        assert not ok
+
+    def test_max_tokens_negative_rejected(self):
+        from weather_agents.core.config import set_config
+
+        ok, _ = set_config("max_tokens", "-100")
+        assert not ok
+
+    def test_timeout_too_large_rejected(self):
+        from weather_agents.core.config import set_config
+
+        ok, _ = set_config("timeout", "99999")
+        assert not ok
+
+    def test_invalid_float_value(self):
+        from weather_agents.core.config import set_config
+
+        ok, msg = set_config("temperature", "not-a-number")
+        assert not ok
+        assert "invalid" in msg.lower()
+
+
+class TestEnvResolution:
+    def test_resolve_env_existing(self, monkeypatch):
+        from weather_agents.core.config import _resolve_env
+
+        monkeypatch.setenv("WA_TEST_KEY", "hello")
+        assert _resolve_env("${WA_TEST_KEY}") == "hello"
+
+    def test_resolve_env_missing_returns_empty_and_warns(self, monkeypatch, caplog):
+        import logging
+
+        from weather_agents.core.config import _resolve_env
+
+        monkeypatch.delenv("WA_MISSING_KEY", raising=False)
+        with caplog.at_level(logging.WARNING, logger="weather_agents.config"):
+            result = _resolve_env("${WA_MISSING_KEY}")
+        assert result == ""
+        assert any("WA_MISSING_KEY" in r.message for r in caplog.records)
+
+    def test_resolve_env_passthrough(self):
+        from weather_agents.core.config import _resolve_env
+
+        assert _resolve_env("plain-value") == "plain-value"

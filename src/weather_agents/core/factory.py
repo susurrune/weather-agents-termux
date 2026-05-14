@@ -6,7 +6,7 @@ Avoids duplication between CLI and web entry points.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from weather_agents.agents.dew import DewAgent
@@ -19,11 +19,15 @@ from weather_agents.core.agent import Task as AgentTask
 from weather_agents.core.bus import MessageBus
 from weather_agents.core.config import AppConfig, load_config
 from weather_agents.core.llm import LLMClient
+from weather_agents.core.logger import get_logger
+from weather_agents.core.mcp import MCPManager
 from weather_agents.core.skill import global_skill_registry
 from weather_agents.core.tool import global_registry
 from weather_agents.plugins.loader import PluginLoader
 from weather_agents.skills.loader import register_all_skills
 from weather_agents.tools.builtin import register_builtin_tools
+
+_log = get_logger("factory")
 
 AGENT_CLASSES = {
     "fog": FogAgent,
@@ -50,14 +54,30 @@ class SystemContext:
     bus: MessageBus
     llm: LLMClient
     agent_map: dict[str, BaseAgent]
+    mcp: MCPManager | None = None
+    mcp_status: list[str] = field(default_factory=list)
 
     async def init_all(self) -> None:
+        # Connect MCP servers first so their tools are registered before agents
+        # snapshot the tool registry.
+        if self.mcp is not None:
+            try:
+                self.mcp_status = await self.mcp.connect_all()
+                if self.mcp_status:
+                    _log.info("mcp_connected: %s", ", ".join(self.mcp_status))
+            except Exception as e:
+                _log.warning("mcp_connect_all_failed: %s", e)
         for agent in self.agent_map.values():
             await agent.init()
 
     async def close_all(self) -> None:
         for agent in self.agent_map.values():
             await agent.close()
+        if self.mcp is not None:
+            try:
+                await self.mcp.close_all()
+            except Exception as e:
+                _log.warning("mcp_close_failed: %s", e)
         from weather_agents.tools.builtin import close_http_client
 
         await close_http_client()
@@ -75,6 +95,13 @@ def create_system_context() -> SystemContext:
     plugin_dirs = config.plugins.directories if config.plugins.enabled else []
     plugin_loader.load_from_directories(plugin_dirs)
 
+    # Configure MCP manager (servers connect during init_all so async I/O
+    # happens inside the event loop, not at construction time).
+    mcp_manager: MCPManager | None = None
+    if config.mcp.servers:
+        mcp_manager = MCPManager(global_registry)
+        mcp_manager.configure(config.mcp.servers)
+
     llm = LLMClient(config, global_registry)
     agents = {
         name: cls(
@@ -86,7 +113,13 @@ def create_system_context() -> SystemContext:
         )
         for name, cls in AGENT_CLASSES.items()
     }
-    return SystemContext(config=config, bus=bus, llm=llm, agent_map=agents)
+    return SystemContext(
+        config=config,
+        bus=bus,
+        llm=llm,
+        agent_map=agents,
+        mcp=mcp_manager,
+    )
 
 
 @dataclass

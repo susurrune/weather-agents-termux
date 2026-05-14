@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from weather_agents.core.llm import LLMClient, LLMResponse, estimate_cost
+from weather_agents.core.llm import (
+    LLMClient,
+    LLMResponse,
+    _is_transient_error,
+    estimate_cost,
+)
 
 
 class TestEstimateCost:
@@ -92,3 +97,63 @@ class TestLLMClientUsageTracking:
         client._track_usage("fog", "gpt-4o", 10000, 5000)
         with pytest.raises(RuntimeError, match="Cost limit exceeded"):
             client._check_budget()
+
+
+class TestTransientErrorClassifier:
+    def test_timeout_is_transient(self):
+        # TimeoutError == asyncio.TimeoutError as of Python 3.11.
+        assert _is_transient_error(TimeoutError())
+
+    def test_connection_error_is_transient(self):
+        assert _is_transient_error(ConnectionError())
+
+    def test_status_429_is_transient(self):
+        exc = RuntimeError("rate limited")
+        exc.status_code = 429  # type: ignore[attr-defined]
+        assert _is_transient_error(exc)
+
+    def test_status_500_is_transient(self):
+        exc = RuntimeError("server error")
+        exc.status_code = 500  # type: ignore[attr-defined]
+        assert _is_transient_error(exc)
+
+    def test_status_400_is_not_transient(self):
+        exc = RuntimeError("bad request")
+        exc.status_code = 400  # type: ignore[attr-defined]
+        assert not _is_transient_error(exc)
+
+    def test_value_error_is_not_transient(self):
+        # Programmer/config errors should not be retried.
+        assert not _is_transient_error(ValueError("bad config"))
+        assert not _is_transient_error(KeyError("missing"))
+
+    def test_named_litellm_error_classes_are_transient(self):
+        class RateLimitError(Exception):
+            pass
+
+        class APITimeoutError(Exception):
+            pass
+
+        assert _is_transient_error(RateLimitError())
+        assert _is_transient_error(APITimeoutError())
+
+
+class TestLLMCacheKey:
+    def test_cache_key_includes_temperature(self):
+        from weather_agents.core.cache import LLMCache
+
+        cache = LLMCache(max_size=10, ttl_seconds=60)
+        msgs = [{"role": "user", "content": "hi"}]
+        cache.set("gpt-4o", msgs, "first answer", {"temperature": 0.5})
+        # Different temperature must miss.
+        assert cache.get("gpt-4o", msgs, {"temperature": 0.9}) is None
+        # Same params must hit.
+        assert cache.get("gpt-4o", msgs, {"temperature": 0.5}) == "first answer"
+
+    def test_cache_refuses_short_responses(self):
+        from weather_agents.core.cache import LLMCache
+
+        cache = LLMCache(max_size=10, ttl_seconds=60)
+        msgs = [{"role": "user", "content": "hi"}]
+        cache.set("gpt-4o", msgs, "ok", {"temperature": 0.5})  # 2 chars — refused
+        assert cache.get("gpt-4o", msgs, {"temperature": 0.5}) is None

@@ -33,6 +33,27 @@ app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=True)
 console = Console()
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"Weather Agents v{__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _global_options(
+    version: bool = typer.Option(  # noqa: B008
+        False,
+        "--version",
+        "-V",
+        help="Show version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """Top-level Typer callback hosting global flags like --version."""
+    _ = version  # Consumed by callback above.
+
+
 # -- Spinner + status chat -------------------------------------------------
 
 
@@ -107,6 +128,22 @@ async def _interactive(agent_name: str | None = None) -> None:
                 continue
             if cmd_lower == "/cost":
                 _print_cost(ctx)
+                continue
+            if cmd_lower == "/cost reset":
+                ctx.llm.reset_usage_stats()
+                console.print("  [dim]usage stats reset[/dim]")
+                continue
+            if cmd_lower == "/memory":
+                await _print_memory_status(ctx)
+                continue
+            if cmd_lower == "/memory clear":
+                for ag in ctx.agent_map.values():
+                    removed = sum(1 for m in ag.memory.short_term if m.role != "system")
+                    await ag.memory.clear_short_term()
+                    console.print(
+                        f"  [green]cleared {ag.emoji} {ag.display_name} "
+                        f"({removed} messages)[/green]"
+                    )
                 continue
             if cmd_lower == "/history":
                 _print_history(ctx)
@@ -304,6 +341,7 @@ def _print_help() -> None:
             [
                 ("/status", "agent overview"),
                 ("/cost", "token usage & cost"),
+                ("/cost reset", "reset cost counter"),
                 ("/history", "event log"),
                 ("/mcp", "MCP server status"),
                 ("/version", "version info"),
@@ -312,6 +350,8 @@ def _print_help() -> None:
         (
             "Session",
             [
+                ("/memory", "memory stats (alias for `wa memory status`)"),
+                ("/memory clear", "clear all short-term memory"),
                 ("/clear", "clear screen"),
                 ("/quit", "exit"),
             ],
@@ -379,11 +419,38 @@ def _print_history(ctx) -> None:
     console.print()
     for e in events[-15:]:
         ts = e.timestamp.strftime("%H:%M:%S")
-        data_str = str(e.data)[:60] if e.data else ""
+        summary = _summarize_event(e.type.value, e.data)
         console.print(
             f"  [dim]{ts}[/dim]  [cyan]{e.type.value:<16}[/cyan]  "
-            f"[bold]{e.source:<6}[/bold]  [dim]{data_str}[/dim]"
+            f"[bold]{e.source:<6}[/bold]  [dim]{summary}[/dim]"
         )
+
+
+def _summarize_event(event_type: str, data: dict | None) -> str:
+    """Render an event's data field as a short, readable line — no truncated dicts."""
+    if not data:
+        return ""
+    if event_type == "tool_call":
+        tool = data.get("tool", "?")
+        args = data.get("args", {})
+        arg_bits = [f"{k}={_short(v)}" for k, v in list(args.items())[:2]]
+        suffix = f"({', '.join(arg_bits)})" if arg_bits else ""
+        return f"{tool}{suffix}"
+    if event_type == "llm_call":
+        usage = data.get("usage") or {}
+        ptok = usage.get("prompt_tokens", 0)
+        ctok = usage.get("completion_tokens", 0)
+        return f"{data.get('model', '?')}  {ptok}→{ctok} tok"
+    if event_type == "state_change":
+        return f"{data.get('old_state', '?')} → {data.get('new_state', '?')}"
+    # Fallback: comma-separated key=value pairs trimmed to width
+    pairs = [f"{k}={_short(v)}" for k, v in list(data.items())[:3]]
+    return ", ".join(pairs)
+
+
+def _short(v) -> str:
+    s = str(v)
+    return s if len(s) <= 30 else s[:27] + "..."
 
 
 def _print_mcp_status(ctx) -> None:
@@ -391,12 +458,37 @@ def _print_mcp_status(ctx) -> None:
     if not mcp_servers:
         console.print("  [dim]no MCP servers configured[/dim]")
         return
+    # Build a name -> "N tools" map from the connection report.
+    connected: dict[str, str] = {}
+    for line in ctx.mcp_status or []:
+        if ":" in line:
+            name, info = line.split(":", 1)
+            connected[name.strip()] = info.strip()
     console.print()
     for s in mcp_servers:
+        name = s.get("name", "?")
         transport = "stdio" if s.get("command") else "sse"
         enabled = s.get("enabled", True)
-        icon = "[green]●[/green]" if enabled else "[dim]○[/dim]"
-        console.print(f"  {icon}  [cyan]{s.get('name', '?')}[/cyan]  [dim]{transport}[/dim]")
+        if not enabled:
+            icon, status = "[dim]○[/dim]", "[dim]disabled[/dim]"
+        elif name in connected:
+            icon, status = "[green]●[/green]", f"[green]{connected[name]}[/green]"
+        else:
+            icon, status = "[yellow]●[/yellow]", "[yellow]not connected[/yellow]"
+        console.print(f"  {icon}  [cyan]{name}[/cyan]  [dim]{transport}[/dim]  {status}")
+
+
+async def _print_memory_status(ctx) -> None:
+    console.print()
+    for ag in ctx.agent_map.values():
+        short = len(ag.memory.short_term)
+        working = len(ag.memory.working)
+        long_term = await ag.memory.recall(limit=100)
+        console.print(
+            f"  {ag.emoji} {ag.display_name}  "
+            f"[dim]{short} short / {working} working / "
+            f"{len(long_term)} long-term[/dim]"
+        )
 
 
 def _print_skills(agent) -> None:
@@ -432,6 +524,12 @@ def _handle_model_command(cmd: str, ctx) -> None:
 
     arg = parts[1].strip()
     tokens = arg.split(maxsplit=1)
+
+    # Guard: a single token that happens to be an agent name like "/model fog"
+    # used to silently get persisted as the default model. Require explicit form.
+    if len(tokens) == 1 and tokens[0] in AGENT_CLASSES:
+        console.print(f"  [red]missing model name. Usage: /model {tokens[0]} <model>[/red]")
+        return
 
     if len(tokens) == 2 and tokens[0] in AGENT_CLASSES:
         agent_name, model_name = tokens
@@ -736,11 +834,12 @@ def memory(
                     if not agent:
                         console.print(f"  [red]unknown agent: {name}[/red]")
                         continue
-                    count = len(agent.memory.short_term)
+                    # Count only non-system messages — those are what clear_short_term removes.
+                    removed = sum(1 for m in agent.memory.short_term if m.role != "system")
                     await agent.memory.clear_short_term()
                     console.print(
                         f"  [green]cleared {agent.emoji} {agent.display_name} "
-                        f"({count} messages)[/green]"
+                        f"({removed} messages)[/green]"
                     )
             else:
                 for _name, agent in ctx.agent_map.items():
@@ -756,6 +855,43 @@ def memory(
             await ctx.close_all()
 
     asyncio.run(_run())
+
+
+# -- Init / Setup Wizard --------------------------------------------------
+
+
+@app.command()
+def init() -> None:
+    """First-run setup wizard: pick a default model and store an API key."""
+    console.print("\n  [bold]Weather Agents — Setup[/bold]\n")
+
+    # 1. Default model
+    catalog = load_model_catalog()
+    default_models = []
+    for provider, models in catalog.items():
+        for m in models:
+            default_models.append((provider, m["name"]))
+    if default_models:
+        console.print("  [bold dim]Available models:[/bold dim]")
+        for i, (prov, name) in enumerate(default_models, 1):
+            console.print(f"    [dim]{i:>2}.[/dim] [cyan]{name}[/cyan]  [dim]({prov})[/dim]")
+        choice = console.input("\n  Pick default model number (Enter to keep current): ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(default_models):
+            model_name = default_models[int(choice) - 1][1]
+            ok, msg = set_config("default_model", model_name)
+            color = "green" if ok else "red"
+            console.print(f"  [{color}]{msg}[/{color}]")
+
+    # 2. API keys
+    console.print("\n  [bold dim]API keys[/bold dim]  [dim](leave blank to skip)[/dim]")
+    for provider in ("openai", "anthropic", "deepseek"):
+        key = console.input(f"  {provider:<10} key: ").strip()
+        if key:
+            ok, msg = set_config(f"api_key.{provider}", key)
+            color = "green" if ok else "red"
+            console.print(f"  [{color}]{msg}[/{color}]")
+
+    console.print("\n  [green]Setup complete.[/green]  Run [cyan]wa chat[/cyan] to start.\n")
 
 
 # -- Version ---------------------------------------------------------------

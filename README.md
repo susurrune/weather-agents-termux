@@ -53,11 +53,11 @@
 
 | Agent | 中文 | 职能 | 专属技能 |
 |:------|:-----|:-----|:---------|
-| 🌫️ **Fog** | 雾 | 探索研究 | `web_research` · `code_analysis` · `doc_analysis` |
+| 🌫️ **Fog** | 雾 | 探索研究 | `web_research` · `code_analysis` · `document_analysis` |
 | 🌧️ **Rain** | 雨 | 生成创造 | `code_generator` · `content_writer` · `data_transformer` |
-| ❄️ **Frost** | 霜 | 审查优化 | `code_reviewer` · `security_audit` · `performance_check` |
+| ❄️ **Frost** | 霜 | 审查优化 | `code_reviewer` · `security_auditor` · `performance_checker` |
 | 🌨️ **Snow** | 雪 | 规划编排 | `task_planner` · `arch_designer` · `workflow_designer` |
-| 💧 **Dew** | 露 | 运维集成 | `sys_operator` · `ci_cd` · `api_integrator` |
+| 💧 **Dew** | 露 | 运维集成 | `sys_operator` · `ci_cd_manager` · `api_integrator` |
 
 ## Quick Start
 
@@ -70,14 +70,18 @@ pip install git+https://github.com/susurrune/weather-agents.git
 ### 2. Configure
 
 ```bash
-# 方式一：环境变量（推荐）
-cp .env.example .env
-# 编辑 .env 填入 API Key
+# 推荐：交互式向导（选择默认模型 + 录入 API key）
+wa init
 
-# 方式二：CLI 配置
+# 或：CLI 单条配置
 wa config set api_key.openai sk-xxx
 wa config set api_key.anthropic sk-ant-xxx
 wa config set api_key.deepseek sk-xxx
+
+# 或：环境变量
+export OPENAI_API_KEY=sk-xxx
+export ANTHROPIC_API_KEY=sk-ant-xxx
+export DEEPSEEK_API_KEY=sk-xxx
 ```
 
 ### 3. Use
@@ -99,11 +103,13 @@ wa task "设计并实现一个 URL 短链接服务"
 
 | Command | Description |
 |:--------|:------------|
+| `wa init` | 交互式配置向导（首次运行推荐） |
 | `wa chat [agent] [message]` | 对话（默认 `fog`，支持 `fog` `rain` `frost` `snow` `dew`）|
 | `wa task <goal>` | Snow Agent 拆解目标并调度多 Agent 协作 |
 | `wa status` | 查看所有 Agent 状态 |
-| `wa config list\|set\|delete` | 查看/修改/删除配置 |
+| `wa config list\|set\|delete\|models` | 查看/修改/删除配置 · 列出可用模型 |
 | `wa memory status\|clear` | 查看/清除记忆 |
+| `wa --version` / `wa version` | 版本信息 |
 
 ### Interactive Commands
 
@@ -117,11 +123,12 @@ wa task "设计并实现一个 URL 短链接服务"
 | `/use <skill>` | 激活技能（增强提示词 + 扩展工具） |
 | `/deactivate` | 关闭所有技能 |
 | `/status` | Agent 状态一览 |
-| `/model [name]` | 查看/切换模型 |
+| `/model [name]` / `/model <agent> <name>` | 查看/切换模型（默认或按 Agent） |
 | `/apikey` | 管理 API keys |
-| `/cost` | 查看 Token 用量和费用 |
+| `/cost` · `/cost reset` | 查看 Token 用量和费用 · 重置计数器 |
+| `/memory` · `/memory clear` | 查看记忆状态 · 清除所有短期记忆 |
 | `/history` | 查看事件日志 |
-| `/mcp` | MCP 服务器状态 |
+| `/mcp` | MCP 服务器状态（含已连接工具数） |
 | `/version` | 版本信息 |
 | `/clear` | 清屏 |
 | `/quit` | 退出 |
@@ -134,10 +141,12 @@ wa task "设计并实现一个 URL 短链接服务"
 
 | Provider | Models |
 |:---------|:-------|
-| OpenAI | `gpt-4o` · `gpt-4o-mini` · `gpt-4.1-nano` |
-| Anthropic | `claude-sonnet-4-20250514` · `claude-haiku-4-20250414` |
+| OpenAI | `gpt-4o` · `gpt-4o-mini` · `gpt-4.1` · `gpt-4.1-mini` · `gpt-4.1-nano` |
+| Anthropic | `claude-opus-4-7` · `claude-sonnet-4-6` · `claude-haiku-4-5` |
 | DeepSeek | `deepseek-v4-flash` · `deepseek-v4-pro` |
-| Ollama | `ollama/llama3` · `ollama/deepseek-r1` (本地) |
+| Ollama | `ollama/llama3` · `ollama/qwen2.5` · `ollama/deepseek-r1` (本地) |
+
+> Use `wa config models` to see what your installation currently supports.
 
 ### Skill System
 
@@ -145,10 +154,10 @@ wa task "设计并实现一个 URL 短链接服务"
 
 ```bash
 wa chat frost
-> /skills              # 查看 Frost 的 3 个技能
-> /use security_audit   # 激活安全审计模式
-> 审查这段代码的安全性    # Frost 现在拥有安全审计的增强提示词和专属工具
-> /deactivate           # 回到基础模式
+> /skills                # 查看 Frost 的 3 个技能
+> /use security_auditor  # 激活安全审计模式
+> 审查这段代码的安全性     # Frost 现在拥有安全审计的增强提示词和专属工具
+> /deactivate            # 回到基础模式
 ```
 
 ### Three-Layer Memory
@@ -198,11 +207,19 @@ llm = LLMClient(config, cost_limit=5.0)  # 超过 $5 自动停止
 | `read_file` / `write_file` / `edit_file` | 文件读写编辑 |
 | `list_directory` / `tree` | 目录浏览 |
 | `move_file` / `copy_file` / `delete_file` | 文件管理 |
-| `file_search` / `code_search` | 搜索 |
-| `shell_exec` | 安全执行 Shell 命令 |
-| `http_get` / `http_post` | HTTP 请求 |
+| `file_search` / `code_search` | 搜索（`code_search` 支持 `regex=true`）|
+| `shell_exec` | 安全执行命令（非 shell，禁用管道/重定向；危险命令黑名单）|
+| `http_get` / `http_post` | HTTP 请求（默认拒绝私网/回环/IMDS）|
 | `web_search` | DuckDuckGo 搜索 |
 | `get_cwd` | 获取工作目录 |
+
+### Safety Defaults
+
+- **`shell_exec`** 使用 `subprocess` 的参数列表模式，不解析 shell 元字符（`;` `|` `&&` `$(...)`）。
+  自动拒绝危险二进制（`sudo` `dd` `mkfs` `shutdown` 等）和针对系统根、用户家目录、Windows 盘符根的 `rm -rf`。
+- **`http_get` / `http_post`** 默认拒绝 `localhost`、私网 IP（10/172.16/192.168/...）、回环、链路本地、IMDS 端点。
+  需要访问内网时设置 `WA_ALLOW_PRIVATE_NET=1` 显式放行。
+- 所有长输出（文件、stdout/stderr、HTTP body、搜索结果）以可见的截断标记结尾，避免 LLM 误以为是完整内容。
 
 ### MCP Integration
 
@@ -274,8 +291,8 @@ memory:
 # 安装开发依赖
 pip install -e ".[dev]"
 
-# 测试（94 tests）
-pytest tests/ -v
+# 测试（107 tests, 60%+ 覆盖率）
+pytest tests/ -v --cov=weather_agents
 
 # Lint
 ruff check src/ tests/
@@ -296,7 +313,7 @@ ruff format src/ tests/
 | CLI | Typer · Rich (spinner, markdown, tables) |
 | Memory | aiosqlite · 3-layer architecture |
 | Search | DuckDuckGo (built-in, no API key) |
-| Tools | 16 built-in · MCP Protocol · Plugin system |
+| Tools | 15 built-in · MCP Protocol · Plugin system |
 | CI | GitHub Actions · Ruff · MyPy · Pytest |
 
 ## License

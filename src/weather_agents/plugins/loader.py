@@ -7,7 +7,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from weather_agents.core.logger import get_logger
 from weather_agents.core.tool import Tool, ToolRegistry
+
+_log = get_logger("plugins")
 
 
 class Plugin:
@@ -76,7 +79,7 @@ class PluginLoader:
 
             return None
         except Exception as e:
-            print(f"Warning: Failed to load plugin from {path}: {e}")
+            _log.warning("plugin_load_failed: %s — %s", path, e)
             return None
 
     def load_from_directories(self, directories: list[str]) -> list[Plugin]:

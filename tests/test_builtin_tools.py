@@ -275,3 +275,144 @@ class TestFileManagementTools:
 
         result = await _get_cwd()
         assert os.path.isabs(result)
+
+
+class TestTruncation:
+    def test_truncate_under_limit(self):
+        from weather_agents.tools.builtin import _truncate
+
+        assert _truncate("hi", 100) == "hi"
+
+    def test_truncate_over_limit_has_marker(self):
+        from weather_agents.tools.builtin import _truncate
+
+        out = _truncate("x" * 500, 100, label="file")
+        assert out.startswith("x" * 100)
+        assert "truncated" in out
+        assert "500" in out
+        assert "file" in out
+
+
+class TestShellSafety:
+    def test_dangerous_rm_root(self):
+        from weather_agents.tools.builtin import _is_dangerous_rm
+
+        assert _is_dangerous_rm(["rm", "-rf", "/"])
+        assert _is_dangerous_rm(["rm", "-rf", "~"])
+        assert _is_dangerous_rm(["rm", "-rf", "."])
+        assert _is_dangerous_rm(["rm", "-r", "--recursive", "C:\\"])
+
+    def test_safe_rm(self):
+        from weather_agents.tools.builtin import _is_dangerous_rm
+
+        assert not _is_dangerous_rm(["rm", "file.txt"])
+        assert not _is_dangerous_rm(["rm", "-rf", "build/"])
+        assert not _is_dangerous_rm(["rm", "-rf", "/tmp/specific-dir"])
+
+    @pytest.mark.asyncio
+    async def test_shell_exec_blocks_sudo(self):
+        from weather_agents.tools.builtin import _shell_exec
+
+        result = await _shell_exec("sudo ls /")
+        assert "Blocked" in result
+
+    @pytest.mark.asyncio
+    async def test_shell_exec_blocks_metacharacters(self):
+        from weather_agents.tools.builtin import _shell_exec
+
+        result = await _shell_exec("echo a; rm -rf /")
+        # shlex may not even parse this — either way it should be refused.
+        assert "Blocked" in result or "Invalid" in result or "exit" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_shell_exec_overlong_command(self):
+        from weather_agents.tools.builtin import _shell_exec
+
+        result = await _shell_exec("echo " + "x" * 5000)
+        assert "too long" in result
+
+
+class TestSSRFGuard:
+    def test_validate_url_rejects_file_scheme(self):
+        from weather_agents.tools.builtin import _validate_url
+
+        assert _validate_url("file:///etc/passwd") is not None
+
+    def test_validate_url_rejects_loopback(self):
+        from weather_agents.tools.builtin import _validate_url
+
+        assert _validate_url("http://127.0.0.1/") is not None
+        assert _validate_url("http://localhost:6379/") is not None
+        assert _validate_url("http://169.254.169.254/latest/meta-data") is not None
+
+    def test_validate_url_rejects_private_ips(self):
+        from weather_agents.tools.builtin import _validate_url
+
+        assert _validate_url("http://10.0.0.1/") is not None
+        assert _validate_url("http://192.168.1.1/") is not None
+        assert _validate_url("http://172.16.0.5/") is not None
+
+    def test_validate_url_allows_public(self):
+        from weather_agents.tools.builtin import _validate_url
+
+        assert _validate_url("https://example.com/api") is None
+        assert _validate_url("https://api.openai.com/v1") is None
+
+
+class TestCodeSearch:
+    @pytest.mark.asyncio
+    async def test_code_search_finds_text(self, tmp_path):
+        from weather_agents.tools.builtin import _code_search
+
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n")
+        (tmp_path / "b.py").write_text("class Bar:\n    pass\n")
+        result = await _code_search(str(tmp_path), "foo")
+        assert "a.py" in result
+        assert "foo" in result
+
+    @pytest.mark.asyncio
+    async def test_code_search_regex_mode(self, tmp_path):
+        from weather_agents.tools.builtin import _code_search
+
+        (tmp_path / "a.py").write_text("x = 42\ny = 13\n")
+        result = await _code_search(str(tmp_path), r"=\s*\d+", regex=True)
+        assert "a.py" in result
+
+    @pytest.mark.asyncio
+    async def test_code_search_invalid_regex(self, tmp_path):
+        from weather_agents.tools.builtin import _code_search
+
+        (tmp_path / "a.py").write_text("x")
+        result = await _code_search(str(tmp_path), "([unclosed", regex=True)
+        assert "invalid regex" in result.lower() or "error" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_code_search_skips_heavy_dirs(self, tmp_path):
+        from weather_agents.tools.builtin import _code_search
+
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text("interesting")
+        (tmp_path / "a.py").write_text("nothing here")
+        result = await _code_search(str(tmp_path), "interesting")
+        assert ".git" not in result
+
+
+class TestFileSearchPathlib:
+    @pytest.mark.asyncio
+    async def test_file_search_recursive(self, tmp_path):
+        from weather_agents.tools.builtin import _file_search
+
+        (tmp_path / "a.py").write_text("")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "b.py").write_text("")
+        result = await _file_search(str(tmp_path), "*.py")
+        assert "a.py" in result
+        assert "b.py" in result
+
+    @pytest.mark.asyncio
+    async def test_file_search_no_match(self, tmp_path):
+        from weather_agents.tools.builtin import _file_search
+
+        result = await _file_search(str(tmp_path), "*.nonexistent")
+        assert "No files" in result
