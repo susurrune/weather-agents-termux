@@ -723,6 +723,19 @@ def chat(
     if agent not in AGENT_CLASSES:
         console.print(f"[red]Unknown agent: {agent}. Use: {', '.join(AGENT_CLASSES)}[/red]")
         raise typer.Exit(1)
+
+    # First-run: nothing is configured yet. Walk the user through the wizard,
+    # then drop straight into chat — no separate `wa init` step required.
+    if not _is_configured():
+        console.print("\n  [yellow]No API key configured yet — running first-run setup.[/yellow]")
+        _run_setup_wizard()
+        if not _is_configured():
+            console.print(
+                "\n  [yellow]Skipped without entering a key. "
+                "Run [cyan]wa init[/cyan] later when ready.[/yellow]\n"
+            )
+            raise typer.Exit(0)
+
     if message:
         asyncio.run(_chat_single(agent, message))
     else:
@@ -860,38 +873,170 @@ def memory(
 # -- Init / Setup Wizard --------------------------------------------------
 
 
-@app.command()
-def init() -> None:
-    """First-run setup wizard: pick a default model and store an API key."""
-    console.print("\n  [bold]Weather Agents — Setup[/bold]\n")
+def _is_configured() -> bool:
+    """Has the user supplied at least one API key (config file or env)?"""
+    cfg = load_config()
+    if any(v for v in cfg.llm.api_keys.values()):
+        return True
+    for env_var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
+        if os.environ.get(env_var):
+            return True
+    return False
 
-    # 1. Default model
-    catalog = load_model_catalog()
-    default_models = []
-    for provider, models in catalog.items():
+
+def _provider_for_model(model: str) -> str:
+    """Infer the provider responsible for a model id."""
+    m = model.lower()
+    if m.startswith("ollama/"):
+        return "local"
+    if "deepseek" in m:
+        return "deepseek"
+    if m.startswith(("claude", "anthropic/")):
+        return "anthropic"
+    if m.startswith(("gpt", "openai/", "o1", "o3", "o4")):
+        return "openai"
+    return "openai"
+
+
+def _flatten_catalog(catalog: dict) -> list[tuple[str, str]]:
+    """Return [(provider, model_name), ...] preserving provider order."""
+    out = []
+    for prov, models in catalog.items():
         for m in models:
-            default_models.append((provider, m["name"]))
-    if default_models:
-        console.print("  [bold dim]Available models:[/bold dim]")
-        for i, (prov, name) in enumerate(default_models, 1):
-            console.print(f"    [dim]{i:>2}.[/dim] [cyan]{name}[/cyan]  [dim]({prov})[/dim]")
-        choice = console.input("\n  Pick default model number (Enter to keep current): ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(default_models):
-            model_name = default_models[int(choice) - 1][1]
-            ok, msg = set_config("default_model", model_name)
-            color = "green" if ok else "red"
-            console.print(f"  [{color}]{msg}[/{color}]")
+            out.append((prov, m["name"]))
+    return out
 
-    # 2. API keys
-    console.print("\n  [bold dim]API keys[/bold dim]  [dim](leave blank to skip)[/dim]")
-    for provider in ("openai", "anthropic", "deepseek"):
-        key = console.input(f"  {provider:<10} key: ").strip()
+
+def _print_catalog(flat: list[tuple[str, str]]) -> None:
+    """Print numbered model menu grouped by provider."""
+    last_prov = None
+    for i, (prov, name) in enumerate(flat, 1):
+        if prov != last_prov:
+            console.print(f"\n    [bold dim]{prov.upper()}[/bold dim]")
+            last_prov = prov
+        console.print(f"      [dim]{i:>2}.[/dim] [cyan]{name}[/cyan]")
+
+
+def _pick_from_catalog(
+    flat: list[tuple[str, str]],
+    prompt: str,
+    default_idx: int | None = None,
+) -> tuple[str, str] | None:
+    """Loop until the user types a valid number or hits Enter for default."""
+    hint = f" [dim](Enter for {default_idx})[/dim]" if default_idx else ""
+    while True:
+        raw = console.input(f"  {prompt}{hint}: ").strip()
+        if not raw and default_idx is not None:
+            return flat[default_idx - 1]
+        if raw.isdigit() and 1 <= int(raw) <= len(flat):
+            return flat[int(raw) - 1]
+        console.print(f"    [red]pick a number 1-{len(flat)}[/red]")
+
+
+def _collect_keys(providers: set[str]) -> None:
+    """Prompt for one API key per cloud provider in the set."""
+    cloud = sorted(p for p in providers if p != "local")
+    if not cloud:
+        console.print("  [dim]All chosen models run locally — no API keys needed.[/dim]")
+        return
+    console.print(f"\n  [bold]API keys for:[/bold] [cyan]{', '.join(cloud)}[/cyan]")
+    console.print("  [dim](pasted keys are hidden in transit but stored in plain YAML)[/dim]\n")
+    for provider in cloud:
+        cfg = load_config()
+        current = cfg.llm.api_keys.get(provider, "")
+        suffix = " [dim](Enter to keep current)[/dim]" if current else ""
+        key = console.input(f"  {provider:<10} key{suffix}: ").strip()
         if key:
             ok, msg = set_config(f"api_key.{provider}", key)
             color = "green" if ok else "red"
-            console.print(f"  [{color}]{msg}[/{color}]")
+            console.print(f"    [{color}]{msg}[/{color}]")
 
-    console.print("\n  [green]Setup complete.[/green]  Run [cyan]wa chat[/cyan] to start.\n")
+
+def _run_setup_wizard() -> None:
+    """Walk the user through choosing a model strategy and storing API keys.
+
+    Does NOT enter chat — the caller decides whether to launch _interactive().
+    """
+    console.print()
+    console.print("  [bold cyan]╭──── Weather Agents Setup ────╮[/bold cyan]")
+    console.print("  [bold cyan]│  configure your agents       │[/bold cyan]")
+    console.print("  [bold cyan]╰──────────────────────────────╯[/bold cyan]")
+
+    catalog = load_model_catalog()
+    if not catalog:
+        console.print("\n  [red]No model catalog found. Reinstall and try again.[/red]")
+        return
+    flat = _flatten_catalog(catalog)
+
+    # Step 1: choose mode
+    console.print("\n  [bold]1.[/bold] How would you like to configure the 5 agents?\n")
+    console.print(
+        "    [cyan]1.[/cyan] [bold]Unified[/bold]   "
+        "— one model + one API key for all agents [dim](recommended)[/dim]"
+    )
+    console.print(
+        "    [cyan]2.[/cyan] [bold]Per-agent[/bold] "
+        "— pick a different model for each agent [dim](advanced)[/dim]"
+    )
+    mode = ""
+    while mode not in ("1", "2"):
+        mode = console.input("\n  Choice [1/2] (Enter for 1): ").strip() or "1"
+        if mode not in ("1", "2"):
+            console.print("    [red]please enter 1 or 2[/red]")
+
+    # Step 2: pick models
+    providers_needed: set[str] = set()
+    if mode == "1":
+        console.print("\n  [bold]2.[/bold] Pick the default model for all 5 agents:")
+        _print_catalog(flat)
+        # Default to the first deepseek entry if present, otherwise first item.
+        default_idx = next((i + 1 for i, (p, _) in enumerate(flat) if p == "deepseek"), 1)
+        picked = _pick_from_catalog(flat, "\n  Model #", default_idx=default_idx)
+        if not picked:
+            return
+        provider, model_name = picked
+        set_config("default_model", model_name)
+        # Reset any per-agent overrides so the default actually applies.
+        for ag in AGENT_CLASSES:
+            delete_config(f"model.{ag}")
+        console.print(f"    [green]default → {model_name}[/green]")
+        providers_needed.add(provider)
+    else:
+        console.print("\n  [bold]2.[/bold] Pick a model for each agent:")
+        _print_catalog(flat)
+        console.print()
+        default_idx = next((i + 1 for i, (p, _) in enumerate(flat) if p == "deepseek"), 1)
+        for agent_name, cls in AGENT_CLASSES.items():
+            label = f"{AGENT_EMOJI[agent_name]} {cls.display_name} ({cls.specialty}) model #"
+            picked = _pick_from_catalog(flat, label, default_idx=default_idx)
+            if not picked:
+                continue
+            prov, model_name = picked
+            set_config(f"model.{agent_name}", model_name)
+            providers_needed.add(prov)
+            console.print(
+                f"    [green]{AGENT_EMOJI[agent_name]} {agent_name} → {model_name}[/green]"
+            )
+
+    # Step 3: collect API keys
+    console.print("\n  [bold]3.[/bold]", end=" ")
+    _collect_keys(providers_needed)
+
+    console.print()
+    console.print("  [green]✓ Setup complete[/green]")
+    cfg_path = USER_CONFIG_DIR / "config.yaml"
+    console.print(f"  [dim]saved to {cfg_path}[/dim]\n")
+
+
+@app.command()
+def init() -> None:
+    """Run the setup wizard, then optionally drop into chat."""
+    _run_setup_wizard()
+    answer = console.input("  Enter chat now? [Y/n]: ").strip().lower()
+    if answer in ("", "y", "yes"):
+        asyncio.run(_interactive())
+    else:
+        console.print("\n  [dim]Run `wa chat` when ready.[/dim]\n")
 
 
 # -- Version ---------------------------------------------------------------

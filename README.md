@@ -69,19 +69,17 @@ pip install git+https://github.com/susurrune/weather-agents.git
 
 ### 2. Configure
 
+首次运行 `wa chat` 时会自动进入设置向导，让你选择：
+
+- **Unified（推荐）**：所有 5 个 Agent 共用一个模型 + 一个 API key
+- **Per-agent**：为每个 Agent 单独挑选模型（适合混搭，比如 Snow 用 Claude 做规划，Rain 用 GPT 写代码，其它用 DeepSeek）
+
+向导只会向你实际选中的 provider 索要 API key。也可以显式重新配置：
+
 ```bash
-# 推荐：交互式向导（选择默认模型 + 录入 API key）
-wa init
-
-# 或：CLI 单条配置
-wa config set api_key.openai sk-xxx
-wa config set api_key.anthropic sk-ant-xxx
-wa config set api_key.deepseek sk-xxx
-
-# 或：环境变量
-export OPENAI_API_KEY=sk-xxx
-export ANTHROPIC_API_KEY=sk-ant-xxx
-export DEEPSEEK_API_KEY=sk-xxx
+wa init                                    # 重新跑向导
+wa config set api_key.deepseek sk-xxx       # 直接写单条
+export DEEPSEEK_API_KEY=sk-xxx              # 或用环境变量
 ```
 
 ### 3. Use
