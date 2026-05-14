@@ -259,6 +259,9 @@ class BaseAgent:
         await self._set_state(AgentState.THINKING)
         self.memory.add_message("user", message)
 
+        if self._should_auto_compact():
+            await self.compact()
+
         try:
             if on_status:
                 on_status("thinking...")
@@ -285,6 +288,10 @@ class BaseAgent:
         await self._set_state(AgentState.THINKING)
         self.memory.add_message("user", message)
         assistant_stored = False
+
+        # Auto-compress when context gets too large
+        if self._should_auto_compact():
+            await self.compact()
 
         try:
             full_content = ""
@@ -416,6 +423,82 @@ class BaseAgent:
             if self.memory.short_term[i].role == "user":
                 self.memory.short_term.pop(i)
                 break
+
+    async def compact(self, keep_recent: int = 8) -> str:
+        """Compress conversation context by summarising older messages.
+
+        Keeps system prompt intact, replaces old messages with a summary,
+        and retains the most recent *keep_recent* messages.
+        """
+        system_msgs = [m for m in self.memory.short_term if m.role == "system"]
+        non_system = [m for m in self.memory.short_term if m.role != "system"]
+
+        if len(non_system) <= keep_recent + 4:
+            return "context is already compact"
+
+        to_summarize = non_system[:-keep_recent]
+        recent = non_system[-keep_recent:]
+
+        text = ""
+        for m in to_summarize:
+            role = m.role
+            content = (m.content or "")[:300]
+            if m.tool_calls:
+                names = ",".join(tc["function"]["name"] for tc in m.tool_calls)
+                content += f" [tools: {names}]"
+            text += f"[{role}] {content}\n"
+
+        resp = await self.llm.complete(
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Summarise this conversation into a single paragraph (<500 chars). "
+                        "Keep all key facts, decisions, code snippets, file paths, and context:\n\n"
+                        + text
+                    ),
+                }
+            ],
+            agent_name=self.name,
+        )
+        summary = resp.content.strip()[:600]
+
+        self.memory.short_term = system_msgs.copy()
+        self.memory.add_message(
+            "user",
+            f"[Context compressed: {len(to_summarize)} earlier messages summarised]\n\n{summary}",
+        )
+        self.memory.add_message("assistant", "Got it, continuing with full context.")
+        for m in recent:
+            self.memory.short_term.append(m)
+
+        return f"compressed {len(to_summarize)} messages ({len(summary)} char summary)"
+
+    def context_usage(self) -> dict:
+        """Return current context usage stats for display."""
+        from weather_agents.core.config import get_model_context_window
+
+        usage = self.memory.get_context_window_usage()
+        model = self.llm._get_model(self.name)
+        max_ctx = get_model_context_window(model)
+        est_tokens = usage["estimated_tokens"]
+        return {
+            "estimated_tokens": est_tokens,
+            "max_tokens": max_ctx,
+            "pct": int(est_tokens / max_ctx * 100) if max_ctx else 0,
+            "message_count": usage["message_count"],
+            "model": model,
+        }
+
+    def _should_auto_compact(self) -> bool:
+        """Check whether context should be auto-compressed."""
+        usage = self.memory.get_context_window_usage()
+        from weather_agents.core.config import get_model_context_window
+
+        model = self.llm._get_model(self.name)
+        max_ctx = get_model_context_window(model)
+        # Trigger auto-compact at 75% of context window
+        return int(usage["estimated_tokens"]) > max_ctx * 0.75
 
     def _active_tool_names(self) -> list[str]:
         """Tool names available to this agent (base + merged from active skills)."""

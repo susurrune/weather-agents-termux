@@ -158,6 +158,33 @@ def _build_response_panel(
     )
 
 
+def _build_status_line(agent, ctx) -> str:
+    """Build a compact status line: model, context bar, msg count, cost."""
+    try:
+        cu = agent.context_usage()
+        model = cu["model"]
+        pct = cu["pct"]
+        est = cu["estimated_tokens"]
+        max_ctx = cu["max_tokens"]
+        msgs = cu["message_count"]
+        cost = ctx.llm.get_total_cost()
+
+        # 10-char usage bar
+        filled = min(10, max(0, int(pct / 10)))
+        bar_color = "green" if pct < 50 else "yellow" if pct < 75 else "red"
+        bar = f"[{bar_color}]{'█' * filled}{'░' * (10 - filled)}[/{bar_color}]"
+
+        ctx_str = f"{est // 1000}k/{max_ctx // 1000}k" if est > 1000 else f"{est}/{max_ctx}"
+        return (
+            f"  {bar} [dim]{pct}% {ctx_str}[/dim]  │  "
+            f"[dim]{msgs} msgs[/dim]  │  "
+            f"[dim]${cost:.4f}[/dim]  │  "
+            f"[dim]{model}[/dim]"
+        )
+    except Exception:
+        return ""
+
+
 # -- Chat -------------------------------------------------------------------
 
 
@@ -204,8 +231,13 @@ async def _interactive(agent_name: str | None = None) -> None:
 
         while True:
             console.print()
-            # Separator before input
-            console.print(Text("  " + "─" * min(console.width - 2, 98), style="dim"))
+            # Status bar: context usage + model + cost
+            status = _build_status_line(agent, ctx)
+            if status:
+                console.print(Text(status))
+                console.print(Text("  " + "─" * min(console.width - 2, 98), style="dim"))
+            else:
+                console.print(Text("  " + "─" * min(console.width - 2, 98), style="dim"))
             try:
                 color = AGENT_COLORS.get(agent.name, "cyan")
                 prompt = Text()
@@ -254,6 +286,14 @@ async def _interactive(agent_name: str | None = None) -> None:
                         f"  [green]cleared {ag.emoji} {ag.display_name} "
                         f"({removed} messages)[/green]"
                     )
+                continue
+            if cmd_lower == "/compact":
+                with console.status(
+                    f"[dim]{agent.emoji} compacting...[/dim]", spinner="dots"
+                ) as status_handle:
+                    result = await agent.compact()
+                    status_handle.stop()
+                console.print(f"  [green]✓ {result}[/green]")
                 continue
             if cmd_lower == "/history":
                 _print_history(ctx)
@@ -478,6 +518,7 @@ def _print_help() -> None:
                 ("/status", "agent overview"),
                 ("/cost", "token usage & cost"),
                 ("/cost reset", "reset cost counter"),
+                ("/compact", "compress context window"),
                 ("/history", "event log"),
                 ("/mcp", "MCP server status"),
                 ("/version", "version info"),

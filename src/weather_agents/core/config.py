@@ -83,6 +83,28 @@ def format_models_for_display(catalog: dict[str, list[dict]]) -> str:
     return "\n".join(lines)
 
 
+_CTX_CACHE: dict[str, int] = {}
+
+def get_model_context_window(model_name: str) -> int:
+    """Look up context window for a model. Returns 128K if unknown."""
+    if not isinstance(model_name, str):
+        return 128000
+    if model_name in _CTX_CACHE:
+        return _CTX_CACHE[model_name]
+    catalog = load_model_catalog()
+    for models in catalog.values():
+        for m in models:
+            if m["name"] == model_name:
+                val = int(m.get("context_window", 128000))
+                _CTX_CACHE[model_name] = val
+                return val
+    # Strip provider prefix and retry
+    if "/" in model_name:
+        return get_model_context_window(model_name.split("/", 1)[1])
+    _CTX_CACHE[model_name] = 128000
+    return 128000
+
+
 # ── Config dataclasses ─────────────────────────────────────────────────────
 
 
