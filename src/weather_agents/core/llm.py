@@ -242,6 +242,21 @@ class LLMClient:
                 f"Cost limit exceeded: ${self._total_cost:.4f} >= ${self._cost_limit:.4f}"
             )
 
+    def _has_key_for_model(self, model: str) -> bool:
+        """Check whether an API key is available for the given model."""
+        provider, _ = _split_provider(model)
+        if provider is None:
+            # Try to guess from model name
+            lowered = model.lower()
+            for p in _KNOWN_PROVIDERS:
+                if p in lowered:
+                    provider = p
+                    break
+        if provider is None:
+            return True  # can't determine; don't skip
+        env_var = _PROVIDER_ENV.get(provider) or f"{provider.upper()}_API_KEY"
+        return bool(os.environ.get(env_var))
+
     async def complete(
         self,
         messages: list[dict],
@@ -252,7 +267,9 @@ class LLMClient:
         self._check_budget()
         model = self._get_model(agent_name)
 
-        fallback_models = _FALLBACK_CHAINS.get(model, [])
+        fallback_models = [
+            m for m in _FALLBACK_CHAINS.get(model, []) if self._has_key_for_model(m)
+        ]
         models_to_try = [model] + fallback_models
 
         last_error: Exception | None = None
@@ -287,7 +304,7 @@ class LLMClient:
             },
         )
         return LLMResponse(
-            content=_format_user_facing_error(self._get_model(agent_name), last_error),
+            content=_format_user_facing_error(model, last_error),
             model=models_to_try[-1],
         )
 

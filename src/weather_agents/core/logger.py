@@ -30,6 +30,14 @@ def get_request_id() -> str | None:
     return _request_id
 
 
+_STD_LOG_RECORD_ATTRS: set[str] = {
+    "args", "asctime", "created", "exc_info", "exc_text", "filename",
+    "funcName", "levelname", "levelno", "lineno", "module", "msecs",
+    "message", "msg", "name", "pathname", "process", "processName",
+    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+}
+
+
 class StructuredFormatter(logging.Formatter):
     """JSON-lines formatter for machine-parseable logs."""
 
@@ -42,9 +50,13 @@ class StructuredFormatter(logging.Formatter):
         }
         if _request_id:
             obj["request_id"] = _request_id
-        if hasattr(record, "extra_fields"):
+        # Capture extra_fields set by log_event()
+        if hasattr(record, "extra_fields") and record.extra_fields:
             obj.update(record.extra_fields)
-        # Drop internal field used for structured logging
+        # Also capture keys from standard logging's extra={} kwarg
+        for key, val in record.__dict__.items():
+            if key not in _STD_LOG_RECORD_ATTRS and not key.startswith("_"):
+                obj[key] = val
         obj.pop("extra_fields", None)
         return json.dumps(obj, ensure_ascii=False, default=str)
 
