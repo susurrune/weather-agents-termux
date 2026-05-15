@@ -62,10 +62,21 @@ class TestShortTermMemory:
 
     @pytest.mark.asyncio
     async def test_tool_message(self, mem):
+        mem.add_message(
+            "assistant",
+            "",
+            tool_calls=[
+                {
+                    "id": "tc_123",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        )
         mem.add_message("tool", "file contents", name="read_file", tool_call_id="tc_123")
         msgs = mem.get_messages()
-        assert msgs[0]["name"] == "read_file"
-        assert msgs[0]["tool_call_id"] == "tc_123"
+        assert msgs[1]["name"] == "read_file"
+        assert msgs[1]["tool_call_id"] == "tc_123"
 
 
 class TestWorkingMemory:
