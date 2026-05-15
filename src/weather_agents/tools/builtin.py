@@ -476,8 +476,7 @@ _BLOCKED_COMMANDS = {
     "net",
     "wmic",
     "schtasks",
-    # Recursive delete (blocked outright for safety; use delete_file tool instead)
-    "rm",
+    # Note: "rm" is NOT blocked here — _is_dangerous_rm() handles protected-path checks below.
 }
 
 # Paths whose recursive deletion is always refused (even with proper flags).

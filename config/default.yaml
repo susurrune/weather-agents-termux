@@ -60,7 +60,7 @@ mcp:
   servers:
     - name: "filesystem"
       command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/root"]
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "~"]
       enabled: false
     - name: "github"
       command: "npx"
