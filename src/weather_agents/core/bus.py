@@ -57,11 +57,14 @@ class MessageBus:
     def remove_state_listener(self, handler: Handler) -> None:
         self._state_listeners.remove(handler)
 
+    def _trim_history(self) -> None:
+        if len(self._history) > self._max_history:
+            del self._history[: len(self._history) - self._max_history]
+
     def add_event(self, event: Event) -> None:
         """Record event without routing (for state changes / local observation)."""
         self._history.append(event)
-        if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history :]
+        self._trim_history()
 
     async def notify_state_change(self, event: Event) -> None:
         """Notify state change listeners (must be called from async context)."""
@@ -73,8 +76,7 @@ class MessageBus:
 
     async def publish(self, event: Event) -> None:
         self._history.append(event)
-        if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history :]
+        self._trim_history()
 
         if event.target:
             # Direct message

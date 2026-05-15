@@ -387,8 +387,9 @@ class BaseAgent:
                             await self._set_state(AgentState.ACTING)
                             try:
                                 result = await tool.execute(**tool_args)
-                            except Exception:
-                                result = f"Tool '{tool_name}' execution failed"
+                            except Exception as exc:
+                                _log.exception("Tool '%s' execution failed: %s", tool_name, exc)
+                                result = f"Tool '{tool_name}' execution failed: {exc}"
                                 self.memory.add_message(
                                     "tool",
                                     result,
@@ -396,6 +397,7 @@ class BaseAgent:
                                     tool_call_id=tc["id"],
                                 )
                                 yield {"type": "tool_done", "label": tool_label, "success": False}
+                                await self._set_state(AgentState.THINKING)
                                 continue
                             self.memory.add_message(
                                 "tool",
@@ -716,6 +718,7 @@ _TOOL_LABELS: dict[str, str] = {
     "lint_file": "Linting {path}",
     "scan_deps": "Scanning {directory}",
     "fetch_page": "Fetching {url}",
+    "delegate_to": "Delegating to {agent}: {task}",
 }
 
 

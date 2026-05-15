@@ -253,8 +253,8 @@ class Memory:
         if len(self.short_term) > self.config.short_term_limit:
             system_msgs = [m for m in self.short_term if m.role == "system"]
             other_msgs = [m for m in self.short_term if m.role != "system"]
-            keep = self.config.short_term_limit - len(system_msgs)
-            self.short_term = system_msgs + other_msgs[-keep:]
+            keep = max(0, self.config.short_term_limit - len(system_msgs))
+            self.short_term = system_msgs + other_msgs[-keep:] if keep else system_msgs
             self._prune_dangling_tool_calls()
 
         if self._db and role != "system":
