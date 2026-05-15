@@ -12,6 +12,9 @@ import yaml
 
 USER_CONFIG_DIR = Path.home() / ".weather-agents"
 
+# All agent names — single source of truth for config iteration and validation.
+AGENT_NAMES = ("fog", "rain", "frost", "snow", "dew", "sunshine")
+
 
 def _find_config_dir() -> Path:
     """Locate the config/ directory reliably in dev and installed modes."""
@@ -339,7 +342,7 @@ def _load_config_uncached() -> AppConfig:
 
     # Per-agent overrides
     if agents := merged.get("agents"):
-        for name in ("fog", "rain", "frost", "snow", "dew"):
+        for name in AGENT_NAMES:
             if agent_cfg := agents.get(name):
                 attr: AgentModelConfig = getattr(cfg.agents, name)
                 if m := agent_cfg.get("model"):
@@ -415,7 +418,7 @@ def set_config(key: str, value: str) -> tuple[bool, str]:
 
     Supported keys:
       default_model, temperature, max_tokens, timeout
-      model.<agent>      (fog/rain/frost/snow/dew)
+      model.<agent>      (fog/rain/frost/snow/dew/sunshine)
       api_key.<provider> (openai/anthropic)
     """
     parts = key.split(".")
@@ -444,9 +447,9 @@ def set_config(key: str, value: str) -> tuple[bool, str]:
     # model.<agent>
     if len(parts) == 2 and parts[0] == "model":
         agent_name = parts[1]
-        VALID_AGENTS = ("fog", "rain", "frost", "snow", "dew")
+        VALID_AGENTS = AGENT_NAMES
         if agent_name not in VALID_AGENTS:
-            return False, f"unknown agent '{agent_name}', use: model.fog etc."
+            return False, f"unknown agent '{agent_name}', use: model.{', model.'.join(AGENT_NAMES)}"
         _save_user_cfg({"agents": {agent_name: {"model": value}}})
         return True, f"{agent_name} model → {value}"
 
@@ -508,7 +511,7 @@ def delete_config(key: str) -> tuple[bool, str]:
 
     if len(parts) == 2 and parts[0] == "model":
         agent_name = parts[1]
-        VALID_AGENTS = ("fog", "rain", "frost", "snow", "dew")
+        VALID_AGENTS = AGENT_NAMES
         if agent_name not in VALID_AGENTS:
             return False, "unknown agent"
         removed = data.get("agents", {}).get(agent_name, {}).pop("model", None)

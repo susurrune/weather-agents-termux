@@ -30,6 +30,9 @@ agents:
   dew:
     model: null
     specialty: "运维集成"
+  sunshine:
+    model: null
+    specialty: "情感陪伴"
 
 # 消息总线设置
 bus:

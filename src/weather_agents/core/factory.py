@@ -57,7 +57,7 @@ AGENT_COLORS: dict[str, str] = {
     "frost": "cyan",
     "snow": "bright_white",
     "dew": "green",
-    "sunshine": "gold",
+    "sunshine": "#FFD700",
 }
 
 

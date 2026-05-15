@@ -151,7 +151,7 @@ wa task "设计并实现一个 URL 短链接服务"
 
 | Command | Description |
 |:--------|:------------|
-| `/fog` `/rain` `/frost` `/snow` `/dew` `/qing` | 切换 Agent |
+| `/fog` `/rain` `/frost` `/snow` `/dew` `/sunshine` | 切换 Agent |
 | `/task <目标>` | 多 Agent 任务编排 |
 | `/skills` | 查看当前 Agent 可用技能 |
 | `/use <skill>` | 激活技能（增强提示词 + 扩展工具） |

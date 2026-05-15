@@ -89,7 +89,6 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/frost", "switch to Frost"),
     ("/snow", "switch to Snow"),
     ("/dew", "switch to Dew"),
-    ("/qing", "switch to Sunshine (晴)"),
     ("/sunshine", "switch to Sunshine (晴)"),
     ("/version", "version info"),
     ("/quit", "exit chat"),
@@ -1301,7 +1300,7 @@ def _print_help(ctx) -> None:
             _h("Agent 切换", "Agents"),
             [
                 (
-                    "/fog  /rain  /frost  /snow  /dew  /qing",
+                    "/fog  /rain  /frost  /snow  /dew  /sunshine",
                     _h("切换当前 Agent", "switch active agent"),
                 ),
                 ("/task <goal>", _h("多 Agent 编排", "multi-agent orchestration")),
@@ -2052,7 +2051,7 @@ async def _run_task(goal: str, agents=None) -> None:
 
 @app.command()
 def chat(
-    agent: str = typer.Argument("fog", help="Agent name (fog/rain/frost/snow/dew)"),
+    agent: str = typer.Argument("fog", help="Agent name (fog/rain/frost/snow/dew/sunshine)"),
     message: str | None = typer.Argument(None, help="Message (omit for interactive mode)"),
 ) -> None:
     """Chat with an agent. Omit message for interactive mode."""
