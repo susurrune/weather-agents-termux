@@ -685,7 +685,7 @@ class TestBuildStatusLine:
             return_value={
                 "model": "gpt-4o",
                 "pct": 0,
-                "estimated_tokens": 50,   # < 1000, uses raw format
+                "estimated_tokens": 50,  # < 1000, uses raw format
                 "max_tokens": 8192,
                 "message_count": 1,
             }
