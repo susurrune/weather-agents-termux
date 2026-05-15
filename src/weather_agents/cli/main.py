@@ -11,7 +11,6 @@ from typing import Any
 
 import typer
 from rich import box
-from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -742,17 +741,17 @@ def _print_welcome(model: str, workspace_path: str = "") -> None:
 
     # ── Header panel ───────────────────────────────────────────────────────
     agents_info = [
-        ("\U0001f32b", "Fog",   "research",     AGENT_COLORS["fog"]),
-        ("\U0001f327", "Rain",  "codegen",       AGENT_COLORS["rain"]),
-        ("❄",          "Frost", "review",        AGENT_COLORS["frost"]),
-        ("\U0001f328", "Snow",  "planning",      AGENT_COLORS["snow"]),
-        ("\U0001f4a7", "Dew",   "devops",        AGENT_COLORS["dew"]),
+        ("\U0001f32b", "Fog", "research", AGENT_COLORS["fog"]),
+        ("\U0001f327", "Rain", "codegen", AGENT_COLORS["rain"]),
+        ("❄", "Frost", "review", AGENT_COLORS["frost"]),
+        ("\U0001f328", "Snow", "planning", AGENT_COLORS["snow"]),
+        ("\U0001f4a7", "Dew", "devops", AGENT_COLORS["dew"]),
     ]
 
     # Agent roster table inside welcome panel
     roster = Table(show_header=False, box=None, padding=(0, 2, 0, 0), expand=False)
-    roster.add_column(width=4)   # emoji
-    roster.add_column(width=8)   # name
+    roster.add_column(width=4)  # emoji
+    roster.add_column(width=8)  # name
     roster.add_column(style="dim", width=12)  # role
 
     for emoji, name, role, color in agents_info:
@@ -801,54 +800,54 @@ def _print_help() -> None:
             "Agents",
             [
                 ("/fog  /rain  /frost  /snow  /dew", "switch active agent"),
-                ("/task <goal>",                     "multi-agent orchestration"),
+                ("/task <goal>", "multi-agent orchestration"),
             ],
         ),
         (
             "Config",
             [
-                ("/model",                    "view current model"),
-                ("/model <name>",             "set default model for all agents"),
-                ("/model <agent> <name>",     "override model per agent"),
-                ("/apikey",                   "list API keys"),
-                ("/apikey set <prov> <key>",  "add / replace key"),
-                ("/apikey del <prov>",        "remove key"),
-                ("/workspace",               "workspace info"),
-                ("/workspace set <path>",    "set custom workspace"),
-                ("/workspace auto",          "reset to auto-detect"),
+                ("/model", "view current model"),
+                ("/model <name>", "set default model for all agents"),
+                ("/model <agent> <name>", "override model per agent"),
+                ("/apikey", "list API keys"),
+                ("/apikey set <prov> <key>", "add / replace key"),
+                ("/apikey del <prov>", "remove key"),
+                ("/workspace", "workspace info"),
+                ("/workspace set <path>", "set custom workspace"),
+                ("/workspace auto", "reset to auto-detect"),
             ],
         ),
         (
             "Skills",
             [
-                ("/skills",          "list available skills"),
-                ("/use <skill>",     "activate a skill"),
-                ("/deactivate",      "deactivate all skills"),
+                ("/skills", "list available skills"),
+                ("/use <skill>", "activate a skill"),
+                ("/deactivate", "deactivate all skills"),
             ],
         ),
         (
             "Info",
             [
-                ("/status",      "agent overview table"),
-                ("/cost",        "token usage & cost breakdown"),
-                ("/cost reset",  "reset usage counters"),
-                ("/compact",     "compress context window"),
-                ("/history",     "event log"),
-                ("/mcp",         "MCP server status"),
-                ("/memory",      "memory layer stats"),
-                ("/memory clear","clear short-term memory"),
-                ("/version",     "version info"),
+                ("/status", "agent overview table"),
+                ("/cost", "token usage & cost breakdown"),
+                ("/cost reset", "reset usage counters"),
+                ("/compact", "compress context window"),
+                ("/history", "event log"),
+                ("/mcp", "MCP server status"),
+                ("/memory", "memory layer stats"),
+                ("/memory clear", "clear short-term memory"),
+                ("/version", "version info"),
             ],
         ),
         (
             "Session",
             [
-                ("/sessions",             "list saved sessions"),
-                ("/session new [name]",   "start a new session"),
-                ("/session load <id>",    "switch to session"),
-                ("/session delete <id>",  "delete session"),
-                ("/clear",               "clear screen & redraw"),
-                ("/quit",                "exit"),
+                ("/sessions", "list saved sessions"),
+                ("/session new [name]", "start a new session"),
+                ("/session load <id>", "switch to session"),
+                ("/session delete <id>", "delete session"),
+                ("/clear", "clear screen & redraw"),
+                ("/quit", "exit"),
             ],
         ),
     ]
@@ -879,10 +878,10 @@ def _print_status(agents: dict) -> None:
         header_style="dim",
         show_edge=False,
     )
-    tbl.add_column("Agent",  width=18)
-    tbl.add_column("State",  width=8)
+    tbl.add_column("Agent", width=18)
+    tbl.add_column("State", width=8)
     tbl.add_column("Skills", style="dim", min_width=10)
-    tbl.add_column("Calls",  justify="right", width=6)
+    tbl.add_column("Calls", justify="right", width=6)
     tbl.add_column("In / Out tokens", justify="right", width=20)
 
     for a in agents.values():
@@ -892,9 +891,7 @@ def _print_status(agents: dict) -> None:
         active_skills = [sk["name"] for sk in s.get("skills", []) if sk.get("active")]
         skills_str = ", ".join(active_skills) if active_skills else "—"
         state_color = "green" if s["state"] == "idle" else "yellow"
-        tokens = (
-            f"{s['usage']['prompt_tokens']:,}  /  {s['usage']['completion_tokens']:,}"
-        )
+        tokens = f"{s['usage']['prompt_tokens']:,}  /  {s['usage']['completion_tokens']:,}"
         agent_cell = Text()
         agent_cell.append(f"{s['emoji']} ", style=f"bold {color}")
         agent_cell.append(s["display_name"], style=f"bold {color}")
@@ -924,11 +921,11 @@ def _print_cost(ctx) -> None:
         header_style="dim",
         show_edge=False,
     )
-    tbl.add_column("Agent",  width=12)
-    tbl.add_column("Calls",  justify="right", width=6)
-    tbl.add_column("In tokens",  justify="right", width=12)
+    tbl.add_column("Agent", width=12)
+    tbl.add_column("Calls", justify="right", width=6)
+    tbl.add_column("In tokens", justify="right", width=12)
     tbl.add_column("Out tokens", justify="right", width=12)
-    tbl.add_column("Cost",   justify="right", width=10)
+    tbl.add_column("Cost", justify="right", width=10)
 
     total_cost = 0.0
     for name, s in stats.items():
@@ -947,7 +944,9 @@ def _print_cost(ctx) -> None:
     total_style = "green" if total_cost < 0.05 else "yellow" if total_cost < 0.50 else "red"
     tbl.add_row(
         Text("total", style="bold"),
-        "", "", "",
+        "",
+        "",
+        "",
         Text(f"${total_cost:.4f}", style=f"bold {total_style}"),
     )
     console.print(tbl)
@@ -969,8 +968,8 @@ def _print_history(ctx) -> None:
         header_style="dim",
         show_edge=False,
     )
-    tbl.add_column("Time",   width=10, style="dim")
-    tbl.add_column("Type",   width=18)
+    tbl.add_column("Time", width=10, style="dim")
+    tbl.add_column("Type", width=18)
     tbl.add_column("Source", width=8)
     tbl.add_column("Detail", style="dim")
 
@@ -1029,10 +1028,10 @@ def _print_mcp_status(ctx) -> None:
     console.print(Rule("  MCP Servers  ", align="left", style="dim"))
 
     tbl = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-    tbl.add_column(width=3)   # icon
+    tbl.add_column(width=3)  # icon
     tbl.add_column(width=20)  # name
     tbl.add_column(width=6, style="dim")  # transport
-    tbl.add_column()          # status
+    tbl.add_column()  # status
 
     for s in mcp_servers:
         name = s.get("name", "?")
@@ -1063,9 +1062,9 @@ async def _print_memory_status(ctx) -> None:
         header_style="dim",
         show_edge=False,
     )
-    tbl.add_column("Agent",     width=18)
-    tbl.add_column("Short",     justify="right", width=8)
-    tbl.add_column("Working",   justify="right", width=8)
+    tbl.add_column("Agent", width=18)
+    tbl.add_column("Short", justify="right", width=8)
+    tbl.add_column("Working", justify="right", width=8)
     tbl.add_column("Long-term", justify="right", width=10)
 
     for ag in ctx.agent_map.values():
@@ -1080,8 +1079,8 @@ async def _print_memory_status(ctx) -> None:
 
         tbl.add_row(
             agent_cell,
-            Text(str(short),          style="dim" if short == 0 else "default"),
-            Text(str(working),        style="dim" if working == 0 else "default"),
+            Text(str(short), style="dim" if short == 0 else "default"),
+            Text(str(working), style="dim" if working == 0 else "default"),
             Text(str(len(long_term)), style="dim" if not long_term else "default"),
         )
     console.print(tbl)
@@ -1099,10 +1098,15 @@ async def _print_sessions(agent) -> None:
         console.print("  [dim]/session new [name]  — start a new one[/dim]")
         return
 
-    tbl = Table(show_header=True, box=box.SIMPLE_HEAD, padding=(0, 2, 0, 0),
-                header_style="dim", show_edge=False)
-    tbl.add_column("", width=2)       # active marker
-    tbl.add_column("ID",      width=20, style="cyan")
+    tbl = Table(
+        show_header=True,
+        box=box.SIMPLE_HEAD,
+        padding=(0, 2, 0, 0),
+        header_style="dim",
+        show_edge=False,
+    )
+    tbl.add_column("", width=2)  # active marker
+    tbl.add_column("ID", width=20, style="cyan")
     tbl.add_column("Name / Preview", min_width=24)
     tbl.add_column("Msgs", justify="right", width=6, style="dim")
 
@@ -1169,27 +1173,28 @@ def _print_skills(agent) -> None:
     color = AGENT_COLORS.get(agent.name, "white")
 
     console.print()
-    console.print(Rule(
-        f"  {agent.emoji} {agent.display_name} Skills  ",
-        align="left",
-        style="dim",
-    ))
+    console.print(
+        Rule(
+            f"  {agent.emoji} {agent.display_name} Skills  ",
+            align="left",
+            style="dim",
+        )
+    )
 
     if not skills:
-        console.print(f"  [dim]no skills available[/dim]")
+        console.print("  [dim]no skills available[/dim]")
         return
 
     tbl = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-    tbl.add_column(width=3)     # status dot
-    tbl.add_column(width=22)    # name
-    tbl.add_column(style="dim") # description
+    tbl.add_column(width=3)  # status dot
+    tbl.add_column(width=22)  # name
+    tbl.add_column(style="dim")  # description
 
     for sk in skills:
-        if sk["active"]:
-            dot = Text("●", style=f"bold {color}")
-        else:
-            dot = Text("○", style="dim")
-        tbl.add_row(dot, Text(sk["name"], style="cyan" if sk["active"] else "dim"), sk["description"])
+        dot = Text("●", style=f"bold {color}") if sk["active"] else Text("○", style="dim")
+        tbl.add_row(
+            dot, Text(sk["name"], style="cyan" if sk["active"] else "dim"), sk["description"]
+        )
 
     console.print(tbl)
     console.print()
@@ -1224,7 +1229,9 @@ def _print_workspace_path() -> None:
     else:
         kv.add_row("configured", configured)
     kv.add_row("resolved", resolved_str)
-    kv.add_row("status", Text("exists", style="green") if exists else Text("not created", style="yellow"))
+    kv.add_row(
+        "status", Text("exists", style="green") if exists else Text("not created", style="yellow")
+    )
 
     try:
         usage = shutil.disk_usage(resolved_str)
@@ -1267,11 +1274,11 @@ def _print_workspace_path() -> None:
         from weather_agents.core.workspace import _get_drive_list
 
         drive_tbl = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-        drive_tbl.add_column(width=2)   # active marker
-        drive_tbl.add_column(width=6)   # path
+        drive_tbl.add_column(width=2)  # active marker
+        drive_tbl.add_column(width=6)  # path
         drive_tbl.add_column(width=12)  # free
         drive_tbl.add_column(width=12, style="dim")  # total
-        drive_tbl.add_column()          # bar
+        drive_tbl.add_column()  # bar
 
         for d in _get_drive_list():
             active = str(resolved).startswith(d.path)
@@ -1510,9 +1517,9 @@ async def _run_task(goal: str, agents=None) -> None:
         # Task plan
         console.print(Rule("  Plan  ", align="left", style="dim"))
         plan_tbl = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
-        plan_tbl.add_column(width=4, style="dim")   # id
-        plan_tbl.add_column(width=4)                # emoji
-        plan_tbl.add_column()                       # description
+        plan_tbl.add_column(width=4, style="dim")  # id
+        plan_tbl.add_column(width=4)  # emoji
+        plan_tbl.add_column()  # description
         plan_tbl.add_column(width=12, style="dim")  # dep
 
         for t in tasks:
@@ -1526,7 +1533,9 @@ async def _run_task(goal: str, agents=None) -> None:
         ok = sum(1 for r in results if r.success)
         total = len(results)
         result_color = "green" if ok == total else "yellow" if ok > 0 else "red"
-        console.print(f"  [{result_color}]{'✓' if ok == total else '!'} {ok}/{total} tasks completed[/{result_color}]")
+        console.print(
+            f"  [{result_color}]{'✓' if ok == total else '!'} {ok}/{total} tasks completed[/{result_color}]"
+        )
 
         if summary:
             console.print()
@@ -1592,10 +1601,10 @@ def status() -> None:
         header_style="dim",
         show_edge=False,
     )
-    tbl.add_column("Agent",     width=20)
+    tbl.add_column("Agent", width=20)
     tbl.add_column("Specialty", style="dim", width=14)
-    tbl.add_column("Model",     width=30)
-    tbl.add_column("Skills",    style="dim")
+    tbl.add_column("Model", width=30)
+    tbl.add_column("Skills", style="dim")
 
     for name, cls in AGENT_CLASSES.items():
         color = AGENT_COLORS.get(name, "white")
@@ -1627,9 +1636,9 @@ def config(
         kv.add_column(width=14, style="dim")
         kv.add_column()
         kv.add_row("default model", Text(cfg.llm.default_model, style="cyan"))
-        kv.add_row("temperature",   str(cfg.llm.temperature))
-        kv.add_row("max tokens",    str(cfg.llm.max_tokens))
-        kv.add_row("timeout",       f"{cfg.llm.timeout}s")
+        kv.add_row("temperature", str(cfg.llm.temperature))
+        kv.add_row("max tokens", str(cfg.llm.max_tokens))
+        kv.add_row("timeout", f"{cfg.llm.timeout}s")
         console.print(kv)
 
         console.print()
@@ -1845,7 +1854,7 @@ def _run_setup_wizard() -> None:
     step1_tbl.add_column(width=3, style="cyan bold")
     step1_tbl.add_column(width=12, style="bold")
     step1_tbl.add_column(style="dim")
-    step1_tbl.add_row("1.", "Unified",   "one model + one API key for all agents  (recommended)")
+    step1_tbl.add_row("1.", "Unified", "one model + one API key for all agents  (recommended)")
     step1_tbl.add_row("2.", "Per-agent", "a different model for each agent  (advanced)")
     console.print(step1_tbl)
 
@@ -1884,7 +1893,9 @@ def _run_setup_wizard() -> None:
             prov, model_name = picked
             set_config(f"model.{agent_name}", model_name)
             providers_needed.add(prov)
-            console.print(f"  [green]✓ {AGENT_EMOJI[agent_name]} {agent_name} → {model_name}[/green]")
+            console.print(
+                f"  [green]✓ {AGENT_EMOJI[agent_name]} {agent_name} → {model_name}[/green]"
+            )
 
     # Step 3: collect API keys
     console.print()
