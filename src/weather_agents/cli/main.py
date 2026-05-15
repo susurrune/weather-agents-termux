@@ -1004,7 +1004,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 plan_t0 = time.monotonic()
                 plan_content = ""
                 plan_live = Live(
-                    _build_stream_display(agent, "", ""),
+                    _build_stream_display(agent, "Planning...", ""),
                     console=console,
                     refresh_per_second=12,
                     transient=False,
@@ -1014,7 +1014,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                     async for event in agent.chat_stream(f"[PLAN] {inp}"):
                         if event["type"] == "content":
                             plan_content += event["text"]
-                            plan_live.update(_build_stream_display(agent, "", plan_content))
+                            plan_live.update(_build_stream_display(agent, "Planning...", plan_content))
                         elif event["type"] == "done":
                             break
                 except KeyboardInterrupt:
@@ -1046,7 +1046,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 t0 = time.monotonic()
                 interrupted = False
                 md_content = ""
-                status_text = ""
+                status_text = "Thinking..."
                 activities: list[dict] = []
 
                 live = Live(
