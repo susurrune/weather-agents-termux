@@ -88,16 +88,16 @@ def _format_user_facing_error(model: str, err: BaseException | None) -> str:
         env_var = _PROVIDER_ENV.get(provider or "", "the appropriate *_API_KEY")
         return (
             f"❌  {model} 调用失败：缺少或无效的 API key。\n"
-            f"请确认 `{env_var}` 已设置，或运行 `wa init` 重新配置。"
+            f"请确认 `{env_var}` 已设置，或运行 `wacode init` 重新配置。"
         )
     if "rate limit" in lowered or "429" in text:
         return f"❌  {model} 速率受限，请稍后重试。"
     if "timeout" in lowered:
-        return f"❌  {model} 请求超时，请稍后重试或调高 `wa config set timeout 180`。"
+        return f"❌  {model} 请求超时，请稍后重试或调高 `wacode config set timeout 180`。"
     if "model" in lowered and ("not found" in lowered or "does not exist" in lowered):
         return (
             f"❌  {model} 不是该 provider 的有效模型 ID。\n"
-            f"运行 `wa config models` 查看可用模型，或 `wa init` 重新选择。"
+            f"运行 `wacode config models` 查看可用模型，或 `wacode init` 重新选择。"
         )
     # Bad request (often due to malformed message sequence from corrupted memory)
     err_name = type(err).__name__.lower() if err else ""
@@ -111,7 +111,7 @@ def _format_user_facing_error(model: str, err: BaseException | None) -> str:
         short = text.splitlines()[0][:200]
         return (
             f"❌  {model} 调用失败 (Bad Request)：{short}\n"
-            f"会话消息序列可能损坏，可运行 `wa memory clear` 清理后重试。"
+            f"会话消息序列可能损坏，可运行 `wacode memory clear` 清理后重试。"
         )
     # Generic fallback — short, no stack trace, no LiteLLM banner.
     short = text.splitlines()[0][:200]

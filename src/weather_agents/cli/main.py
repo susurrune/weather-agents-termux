@@ -102,16 +102,36 @@ def _get_key() -> str:
         ch = _msvcrt.getwch()
         if ch in ("\x00", "\xe0"):
             ch2 = _msvcrt.getwch()
+            # Scan code Z (0x5A) = Shift+Tab on Windows console
+            if ch2 == "Z":
+                return "shift_tab"
             return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(ch2, ch2)
         if ch == "\x03":
             raise KeyboardInterrupt
         if ch == "\x1b":
+            if _msvcrt.kbhit():
+                nxt = _msvcrt.getwch()
+                if nxt == "[" and _msvcrt.kbhit():
+                    nxt2 = _msvcrt.getwch()
+                    if nxt2 == "Z":
+                        return "shift_tab"
+                return "esc"
             return "esc"
         if ch == "\r":
             return "enter"
         if ch == "\x08":
             return "backspace"
         if ch == "\t":
+            # Some Windows terminals pass Shift+Tab as \t (same as Tab).
+            # Use GetAsyncKeyState to check if Shift is held.
+            try:
+                import ctypes as _ct
+
+                SHIFT_MASK = 0x8000
+                if _ct.windll.user32.GetAsyncKeyState(0x10) & SHIFT_MASK:  # VK_SHIFT
+                    return "shift_tab"
+            except Exception:
+                pass
             return "tab"
         return ch
     else:
@@ -130,7 +150,9 @@ def _get_key() -> str:
                     return "right"
                 if nxt == "[D":
                     return "left"
-                if nxt in ("[Z", "OQ", "OP", "OQ"):
+                if nxt == "[Z":
+                    return "shift_tab"
+                if nxt in ("OQ", "OP", "OQ"):
                     return "tab"
                 return "esc"
             if ch == "\x03":
@@ -146,7 +168,7 @@ def _get_key() -> str:
             _termios.tcsetattr(fd, _termios.TCSADRAIN, old)
 
 
-app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=True)
+app = typer.Typer(name="wacode", help="Weather Agents CLI", no_args_is_help=True)
 console = Console()
 
 # Per-agent animated spinner themes for streaming / status indicators
@@ -296,6 +318,230 @@ def _build_status_line(agent, ctx) -> Text:
     return line
 
 
+# -- Choice menu helpers (Claude Code-style interactive selection) ------------
+
+
+def _numbered_blocks(text: str) -> list[str]:
+    """Extract raw numbered-prefix lines from text.  2+ items or empty."""
+    import re
+
+    items: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if re.match(r"^\d+[.、\)\s]\s*\S", stripped):
+            items.append(stripped)
+    return items if len(items) >= 2 else []
+
+
+def _parse_simple_choices(text: str) -> list[str]:
+    """Parse numbered OPTIONS (not questions) from AI response.
+
+    Returns short choice strings (without the leading ``"N. "`` prefix)
+    when the text contains 2+ concise numbered items with NO question
+    marks.  Empty list otherwise.
+
+    Example match::
+        "1. 个人作品集\\n2. 产品官网\\n3. 博客首页"
+        → ["个人作品集", "产品官网", "博客首页"]
+    """
+    import re
+
+    items: list[str] = []
+    for line in text.split("\n"):
+        m = re.match(r"^\s*\d+[.、\)\s]\s*(.+)$", line)
+        if not m:
+            continue
+        content = m.group(1).strip()
+        if "?" in content or "？" in content:
+            continue  # questions, not choices
+        if len(content) > 70:
+            continue  # instructions, not choices
+        items.append(content)
+    return items if len(items) >= 2 else []
+
+
+def _parse_questionnaire(text: str) -> list[dict] | None:
+    r"""Parse a multi-question block into a structured questionnaire.
+
+    Detects::
+
+        1. 什么主题？ — 个人作品集？产品官网？博客首页？
+        2. 为谁做？ — 你本人的品牌？某个项目？
+
+    Returns ``[{"question": str, "options": [str, ...]}, ...]`` with at
+    least one entry, or ``None`` when the pattern is not detected.
+    """
+    import re
+
+    raw = _numbered_blocks(text)
+    if not raw:
+        return None
+
+    questions: list[dict] = []
+    for item in raw:
+        stripped = re.sub(r"^\d+[.、\)\s]+", "", item).strip()
+
+        # Split on dash separator: "Q? — A? B? C?"
+        parts = re.split(r"\s*[—–-]\s*", stripped, maxsplit=1)
+        if len(parts) < 2:
+            continue
+
+        q_text = parts[0].strip()
+        if not any(c in q_text for c in "?？"):
+            continue  # not a question
+
+        # Parse sub-options separated by ？ ? /
+        opts = re.split(r"[？?/]\s*", parts[1])
+        opts = [o.strip().rstrip("？?)）") for o in opts if o.strip() and len(o.strip()) > 1]
+
+        if q_text and len(opts) >= 2:
+            questions.append({"question": q_text, "options": opts})
+
+    return questions if questions else None
+
+
+def _render_choice_menu(items: list[str], title: str = "") -> None:
+    """Build the Rich renderable for a choice-selection popup."""
+    tbl = Table(show_header=False, box=None, padding=(0, 1), expand=False)
+    tbl.add_column()
+    for i, item in enumerate(items):
+        if i == _render_choice_menu.selected:  # type: ignore[attr-defined]
+            tbl.add_row(Text(f"❯ {item}", style="bold cyan"))
+        else:
+            tbl.add_row(Text(f"  {item}", style="default"))
+
+    hint_tbl = Table(show_header=False, box=None, padding=(0, 1))
+    hint_tbl.add_column()
+    hint_tbl.add_row(Text("↑↓ navigate  ·  enter select  ·  esc cancel", style="dim"))
+
+    inner = Table(show_header=False, box=None, padding=0)
+    inner.add_column()
+    inner.add_row(tbl)
+    inner.add_row(hint_tbl)
+
+    panel = Panel(
+        inner,
+        border_style="cyan",
+        box=box.ROUNDED,
+        padding=(0, 1),
+        width=min(80, console.width - 4),
+        title=Text(title, style="dim") if title else None,
+        title_align="left",
+    )
+
+    outer = Table(show_header=False, box=None, padding=0, expand=True)
+    outer.add_column(justify="center")
+    outer.add_row(panel)
+    return outer
+
+
+def _show_choice_menu(
+    items: list[str],
+    title: str = "",
+) -> str | None:
+    """Interactive selection popup.  Returns selected item or ``None``."""
+    _render_choice_menu.selected = 0  # type: ignore[attr-defined]
+
+    with Live(
+        Table(show_header=False, box=None, padding=0),
+        console=console,
+        refresh_per_second=30,
+        transient=True,
+    ) as live:
+        while True:
+            live.update(_render_choice_menu(items, title))
+
+            key = _get_key()
+            if key == "enter":
+                return items[_render_choice_menu.selected]  # type: ignore[attr-defined]
+            if key == "up":
+                _render_choice_menu.selected = max(  # type: ignore[attr-defined]
+                    0,
+                    _render_choice_menu.selected - 1,  # type: ignore[attr-defined]
+                )
+            elif key == "down":
+                _render_choice_menu.selected = min(  # type: ignore[attr-defined]
+                    len(items) - 1,
+                    _render_choice_menu.selected + 1,  # type: ignore[attr-defined]
+                )
+            elif key == "esc":
+                return None
+
+
+async def _run_questionnaire(questions: list[dict]) -> str | None:
+    """Sequential multi-question selector.
+
+    Shows each question with its options, one at a time.  Returns a
+    combined answer string (``"Q1: A；Q2: B"``) or ``None`` on cancel.
+    """
+    answers: list[str] = []
+    for qi, q in enumerate(questions, 1):
+        choice = _show_choice_menu(q["options"], title=f"Q{qi}  {q['question']}")
+        if choice is None:
+            return None  # Esc → abort entire questionnaire
+        answers.append(f"{q['question']} {choice}")
+
+        # Brief confirmation of the selection
+        console.print(f"  [dim]{q['question']}[/dim] [bold]{choice}[/bold]")
+    return "；".join(answers) if answers else None
+
+
+def _ime_cursor_col(display_name: str, buffer: list[str], cursor_pos: int) -> int:
+    """Calculate the terminal column of the visual cursor in the input line."""
+    from rich.cells import cell_len
+
+    prefix = f"  {display_name} ❯ "
+    return cell_len(prefix) + cell_len("".join(buffer[:cursor_pos]))
+
+
+def _place_ime_cursor(col: int) -> None:
+    """Move Windows console cursor to *col* (preserving current row).
+
+    This tells the IME where to display the candidate window instead of
+    defaulting to the far-right of the terminal after a Rich ``Live``
+    update.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes
+        import struct
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+
+        csbi = ctypes.create_string_buffer(22)
+        kernel32.GetConsoleScreenBufferInfo(handle, csbi)
+        _, cur_y = struct.unpack_from("HH", csbi, 4)  # X, Y from dwCursorPosition
+
+        coord = ctypes.wintypes._COORD(col, cur_y)
+        kernel32.SetConsoleCursorPosition(handle, coord)
+    except Exception:
+        pass
+
+
+# -- Interactive mode (plan / auto) ------------------------------------------
+
+INTERACTIVE_MODE: str = "auto"  # "auto" or "plan"
+
+
+def _should_auto_continue(text: str) -> bool:
+    """Check if the AI response signals more work — auto-continue."""
+    last_lines = [ln for ln in text.strip().split("\n") if ln.strip()][-3:]
+    keywords = [
+        "继续",
+        "接下来",
+        "下一个",
+        "挨个",
+        "ongoing",
+        "next",
+        "continue",
+        "remaining",
+    ]
+    return any(any(kw in line for kw in keywords) for line in last_lines)
+
+
 # -- Chat -------------------------------------------------------------------
 
 
@@ -347,6 +593,7 @@ def _build_input_display(
     popup_visible: bool,
     selected_idx: int,
     filtered_commands: list[tuple[str, str]],
+    mode: str = "auto",
 ) -> list:
     """Build renderables for the input area with optional command popup."""
     color = AGENT_COLORS.get(agent.name, "cyan")
@@ -360,6 +607,10 @@ def _build_input_display(
     # ── Prompt line ──────────────────────────────────────────────────────────
     prompt = Text()
     prompt.append("  ")
+    if mode == "plan":
+        prompt.append("[PLAN] ", style="bold magenta")
+    elif mode == "auto":
+        prompt.append("[AUTO] ", style="bold yellow")
     prompt.append(agent.display_name, style=f"bold {color}")
     prompt.append(" ❯ ", style=f"{color}")
     if buffer:
@@ -453,8 +704,11 @@ def _build_input_display(
     return results
 
 
-def _read_line_with_popup(agent, ctx) -> str:
-    """Read a line of input with slash-command popup support."""
+def _read_line_with_popup(agent, ctx, mode: str = "auto") -> str:
+    """Read a line of input with slash-command popup support.
+
+    *mode* controls the indicator shown in the input bar ("auto" or "plan").
+    """
     # Fall back to simple input when stdin is not a TTY (piped / test env)
     if not sys.stdin.isatty():
         color = AGENT_COLORS.get(agent.name, "cyan")
@@ -484,10 +738,13 @@ def _read_line_with_popup(agent, ctx) -> str:
             tbl = Table(show_header=False, box=None, padding=0, expand=True)
             tbl.add_column(ratio=1)
             for item in _build_input_display(
-                agent, ctx, text, cursor_pos, popup_visible, selected_idx, filtered
+                agent, ctx, text, cursor_pos, popup_visible, selected_idx, filtered, mode
             ):
                 tbl.add_row(item)
             live.update(tbl)
+            # Move the console cursor to match the visual ▌ position so
+            # the IME candidate window appears in the right place.
+            _place_ime_cursor(_ime_cursor_col(agent.display_name, buffer, cursor_pos))
 
             try:
                 key = _get_key()
@@ -537,6 +794,19 @@ def _read_line_with_popup(agent, ctx) -> str:
                     cursor_pos += 1
                 continue
 
+            if key == "shift_tab":
+                # Toggle between auto and plan mode
+                global INTERACTIVE_MODE
+                INTERACTIVE_MODE = "plan" if INTERACTIVE_MODE == "auto" else "auto"
+                mode = INTERACTIVE_MODE  # sync local var so the display updates
+                mode_tag = (
+                    "[bold yellow]AUTO[/bold yellow]"
+                    if INTERACTIVE_MODE == "auto"
+                    else "[bold magenta]PLAN[/bold magenta]"
+                )
+                console.print(f"  {mode_tag}")
+                continue
+
             if popup_visible and filtered:
                 if key == "up":
                     selected_idx = max(0, selected_idx - 1)
@@ -580,6 +850,7 @@ def _read_line_with_popup(agent, ctx) -> str:
 
 
 async def _interactive(agent_name: str | None = None) -> None:
+    global INTERACTIVE_MODE
     ctx = create_system_context()
     # Lazy init: only initialize current agent, not all 5
     current = agent_name or "fog"
@@ -595,7 +866,7 @@ async def _interactive(agent_name: str | None = None) -> None:
 
         while True:
             try:
-                inp = _read_line_with_popup(agent, ctx)
+                inp = _read_line_with_popup(agent, ctx, INTERACTIVE_MODE)
             except (EOFError, KeyboardInterrupt):
                 console.print()
                 break
@@ -696,6 +967,14 @@ async def _interactive(agent_name: str | None = None) -> None:
             if cmd_lower == "/version":
                 console.print(f"  Weather Agents [bold]v{__version__}[/bold]")
                 continue
+            if cmd_lower == "/auto":
+                INTERACTIVE_MODE = "auto"
+                console.print("  [bold yellow]AUTO[/bold yellow]  mode — auto-continue")
+                continue
+            if cmd_lower == "/plan":
+                INTERACTIVE_MODE = "plan"
+                console.print("  [bold magenta]PLAN[/bold magenta]  mode — plan then execute")
+                continue
             if cmd_lower.lstrip("/") in AGENT_CLASSES:
                 new_name = cmd_lower.lstrip("/")
                 new_agent = agents[new_name]
@@ -713,68 +992,139 @@ async def _interactive(agent_name: str | None = None) -> None:
                 _print_help(ctx)
                 continue
 
+            # --- Plan mode: show a plan before executing ---
+            if INTERACTIVE_MODE == "plan":
+                await _init_agent_lazy(agent, ctx)
+                plan_t0 = time.monotonic()
+                plan_content = ""
+                plan_live = Live(
+                    _build_stream_display(agent, "", "", []),
+                    console=console,
+                    refresh_per_second=12,
+                    transient=False,
+                )
+                plan_live.start()
+                try:
+                    async for event in agent.chat_stream(f"[PLAN] {inp}"):
+                        if event["type"] == "content":
+                            plan_content += event["text"]
+                            plan_live.update(_build_stream_display(agent, "", plan_content, []))
+                        elif event["type"] == "done":
+                            break
+                except KeyboardInterrupt:
+                    pass
+                finally:
+                    if plan_content.strip():
+                        plan_live.update(
+                            _build_response_panel(agent, plan_content, time.monotonic() - plan_t0)
+                        )
+                    plan_live.stop()
+
+                if not plan_content.strip():
+                    console.print("  [dim yellow]plan empty — skipping[/dim yellow]")
+                    continue
+
+                console.print()
+                console.print(
+                    "  [dim]Press [bold]Enter[/bold] to execute · [bold]Esc[/bold] to cancel[/dim]"
+                )
+                key = _get_key()
+                if key != "enter":
+                    console.print("  [dim]cancelled[/dim]")
+                    continue
+
             # --- Streaming chat with tool-call support ---
-            await _init_agent_lazy(agent, ctx)
-            t0 = time.monotonic()
-            interrupted = False
-            md_content = ""
-            status_text = ""
-            activities: list[dict] = []
+            # Inner loop: allows choice-menu re-entry with a new input
+            while True:
+                await _init_agent_lazy(agent, ctx)
+                t0 = time.monotonic()
+                interrupted = False
+                md_content = ""
+                status_text = ""
+                activities: list[dict] = []
 
-            live = Live(
-                _build_stream_display(agent, "", "", activities),
-                console=console,
-                refresh_per_second=12,
-                transient=False,
-            )
-            live.start()
+                live = Live(
+                    _build_stream_display(agent, "", "", activities),
+                    console=console,
+                    refresh_per_second=12,
+                    transient=False,
+                )
+                live.start()
 
-            try:
-                async for event in agent.chat_stream(inp):
-                    if event["type"] == "content":
-                        md_content += event["text"]
+                try:
+                    async for event in agent.chat_stream(inp):
+                        if event["type"] == "content":
+                            md_content += event["text"]
+                            live.update(
+                                _build_stream_display(agent, status_text, md_content, activities)
+                            )
+                        elif event["type"] == "tool_status":
+                            status_text = event["label"]
+                            is_dlg = event["label"].startswith("Delegating to ")
+                            activities.append(
+                                {
+                                    "label": event["label"],
+                                    "status": "running",
+                                    "delegation": is_dlg,
+                                }
+                            )
+                            live.update(
+                                _build_stream_display(agent, status_text, md_content, activities)
+                            )
+                        elif event["type"] == "tool_done":
+                            for a in activities:
+                                if a["label"] == event["label"] and a["status"] == "running":
+                                    a["status"] = "done" if event.get("success") else "error"
+                                    break
+                            live.update(
+                                _build_stream_display(agent, status_text, md_content, activities)
+                            )
+                        elif event["type"] == "done":
+                            break
+                except KeyboardInterrupt:
+                    interrupted = True
+                finally:
+                    if md_content.strip():
                         live.update(
-                            _build_stream_display(agent, status_text, md_content, activities)
+                            _build_response_panel(
+                                agent, md_content, time.monotonic() - t0, interrupted
+                            )
                         )
-                    elif event["type"] == "tool_status":
-                        status_text = event["label"]
-                        is_dlg = event["label"].startswith("Delegating to ")
-                        activities.append(
-                            {
-                                "label": event["label"],
-                                "status": "running",
-                                "delegation": is_dlg,
-                            }
-                        )
-                        live.update(
-                            _build_stream_display(agent, status_text, md_content, activities)
-                        )
-                    elif event["type"] == "tool_done":
-                        status_text = ""
-                        for a in activities:
-                            if a["label"] == event["label"] and a["status"] == "running":
-                                a["status"] = "done" if event.get("success") else "error"
-                                break
-                        live.update(
-                            _build_stream_display(agent, status_text, md_content, activities)
-                        )
-                    elif event["type"] == "done":
-                        break
-            except KeyboardInterrupt:
-                interrupted = True
-            finally:
-                if md_content.strip():
-                    live.update(
-                        _build_response_panel(agent, md_content, time.monotonic() - t0, interrupted)
-                    )
-                live.stop()
+                    live.stop()
 
-            if not md_content.strip():
-                if interrupted:
-                    console.print("  [dim]interrupted[/dim]")
+                if not md_content.strip():
+                    if interrupted:
+                        console.print("  [dim]interrupted[/dim]")
+                    else:
+                        console.print("  [dim yellow]model returned empty response[/dim yellow]")
+                    break  # Exit inner loop, back to input
+
+                # — Auto mode: continue if the AI signals more work —
+                if (
+                    INTERACTIVE_MODE == "auto"
+                    and not interrupted
+                    and _should_auto_continue(md_content)
+                ):
+                    inp = "请继续完成"
+                    console.print("  [dim]⋯ auto-continue[/dim]")
+                    continue  # Restart streaming
+
+                # — Choice menu: detect numbered options and show interactive popup —
+                # Try questionnaire first, fall back to single-select
+                questions = _parse_questionnaire(md_content)
+                if questions:
+                    inp = await _run_questionnaire(questions)
+                    if inp is not None:
+                        continue  # Restart streaming with combined answers
                 else:
-                    console.print("  [dim red]no response received[/dim red]")
-                continue
+                    choices = _parse_simple_choices(md_content)
+                    if choices:
+                        choice = _show_choice_menu(choices)
+                        if choice is not None:
+                            inp = choice
+                            continue  # Restart streaming with selected choice
+
+                break  # No choices or user cancelled → back to main input loop
 
     finally:
         console.print()
@@ -1663,14 +2013,14 @@ def chat(
         raise typer.Exit(1)
 
     # First-run: nothing is configured yet. Walk the user through the wizard,
-    # then drop straight into chat — no separate `wa init` step required.
+    # then drop straight into chat — no separate `wacode init` step required.
     if not _is_configured():
         console.print("\n  [yellow]No API key configured yet — running first-run setup.[/yellow]")
         _run_setup_wizard()
         if not _is_configured():
             console.print(
                 "\n  [yellow]Skipped without entering a key. "
-                "Run [cyan]wa init[/cyan] later when ready.[/yellow]\n"
+                "Run [cyan]wacode init[/cyan] later when ready.[/yellow]\n"
             )
             raise typer.Exit(0)
 
@@ -1771,7 +2121,7 @@ def config(
 
     elif action == "set":
         if not key or value is None:
-            console.print("  [red]usage: wa config set <key> <value>[/red]")
+            console.print("  [red]usage: wacode config set <key> <value>[/red]")
             raise typer.Exit(1)
         ok, msg = set_config(key, value)
         color = "green" if ok else "red"
@@ -1779,7 +2129,7 @@ def config(
 
     elif action == "delete":
         if not key:
-            console.print("  [red]usage: wa config delete <key>[/red]")
+            console.print("  [red]usage: wacode config delete <key>[/red]")
             raise typer.Exit(1)
         ok, msg = delete_config(key)
         color = "green" if ok else "red"
@@ -2011,7 +2361,7 @@ def init() -> None:
     if answer in ("", "y", "yes"):
         asyncio.run(_interactive())
     else:
-        console.print("\n  [dim]Run `wa chat` when ready.[/dim]\n")
+        console.print("\n  [dim]Run `wacode` when ready.[/dim]\n")
 
 
 # -- Version ---------------------------------------------------------------
