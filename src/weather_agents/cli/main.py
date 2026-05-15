@@ -325,33 +325,37 @@ def _build_status_line(agent, ctx) -> Text:
 
 
 def _numbered_blocks(text: str) -> list[str]:
-    """Extract raw numbered-prefix lines from text.  2+ items or empty."""
+    """Extract numbered or letter-prefixed lines from text.  2+ items or empty."""
     import re
 
     items: list[str] = []
     for line in text.split("\n"):
         stripped = line.strip()
-        if re.match(r"^\d+[.、\)\s]\s*\S", stripped):
+        if re.match(r"^(?:\d+|[A-Za-z])[.、\)\s]\s*\S", stripped):
             items.append(stripped)
     return items if len(items) >= 2 else []
 
 
 def _parse_simple_choices(text: str) -> list[str]:
-    """Parse numbered OPTIONS (not questions) from AI response.
+    """Parse numbered or letter-prefixed OPTIONS (not questions) from AI response.
 
     Returns short choice strings (without the leading ``"N. "`` prefix)
-    when the text contains 2+ concise numbered items with NO question
-    marks.  Empty list otherwise.
+    when the text contains 2+ concise items with NO question marks.
+    Empty list otherwise.
 
     Example match::
         "1. 个人作品集\\n2. 产品官网\\n3. 博客首页"
         → ["个人作品集", "产品官网", "博客首页"]
+
+    Also matches letter prefixes::
+        "A. 功能测试\\nB. 性能测试\\nC. 安全测试"
+        → ["功能测试", "性能测试", "安全测试"]
     """
     import re
 
     items: list[str] = []
     for line in text.split("\n"):
-        m = re.match(r"^\s*\d+[.、\)\s]\s*(.+)$", line)
+        m = re.match(r"^\s*(?:\d+|[A-Za-z])[.、\)\s]\s*(.+)$", line)
         if not m:
             continue
         content = m.group(1).strip()
@@ -382,7 +386,7 @@ def _parse_questionnaire(text: str) -> list[dict] | None:
 
     questions: list[dict] = []
     for item in raw:
-        stripped = re.sub(r"^\d+[.、\)\s]+", "", item).strip()
+        stripped = re.sub(r"^(?:\d+|[A-Za-z])[.、\)\s]+", "", item).strip()
 
         # Split on dash separator: "Q? — A? B? C?"
         parts = re.split(r"\s*[—–-]\s*", stripped, maxsplit=1)
