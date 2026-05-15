@@ -990,7 +990,9 @@ async def _interactive(agent_name: str | None = None) -> None:
                 continue
             if cmd_lower == "/auto":
                 INTERACTIVE_MODE = "auto"
-                console.print("  [bold yellow]AUTO[/bold yellow]  mode — autonomous reasoning & execution")
+                console.print(
+                    "  [bold yellow]AUTO[/bold yellow]  mode — autonomous reasoning & execution"
+                )
                 continue
             if cmd_lower == "/plan":
                 INTERACTIVE_MODE = "plan"
