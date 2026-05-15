@@ -404,7 +404,7 @@ def _parse_questionnaire(text: str) -> list[dict] | None:
     return questions if questions else None
 
 
-def _render_choice_menu(items: list[str], title: str = "") -> None:
+def _render_choice_menu(items: list[str], title: str = "") -> Table:
     """Build the Rich renderable for a choice-selection popup."""
     tbl = Table(show_header=False, box=None, padding=(0, 1), expand=False)
     tbl.add_column()
@@ -872,7 +872,7 @@ async def _interactive(agent_name: str | None = None) -> None:
 
         while True:
             try:
-                inp = _read_line_with_popup(agent, ctx, INTERACTIVE_MODE)
+                inp: str | None = _read_line_with_popup(agent, ctx, INTERACTIVE_MODE)
             except (EOFError, KeyboardInterrupt):
                 console.print()
                 break
@@ -2005,7 +2005,7 @@ async def _run_task(goal: str, agents=None) -> None:
 @app.command()
 def chat(
     agent: str = typer.Argument("fog", help="Agent name (fog/rain/frost/snow/dew)"),
-    message: str = typer.Argument(None, help="Message (omit for interactive mode)"),
+    message: str | None = typer.Argument(None, help="Message (omit for interactive mode)"),
 ) -> None:
     """Chat with an agent. Omit message for interactive mode."""
     if agent not in AGENT_CLASSES:
