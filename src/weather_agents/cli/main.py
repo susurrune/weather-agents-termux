@@ -224,9 +224,8 @@ def _build_stream_display(
     agent,
     status_text: str,
     md_content: str,
-    activities: list[dict],
 ) -> Table:
-    """Live renderable during streaming: agent header + content + tool activity."""
+    """Live renderable during streaming: agent header + content."""
     color = AGENT_COLORS.get(agent.name, "white")
     spinner_name = AGENT_SPINNERS.get(agent.name, "dots")
 
@@ -252,14 +251,6 @@ def _build_stream_display(
     # Streamed content
     if md_content:
         tbl.add_row(Padding(Markdown(_strip_hr(md_content)), pad=(0, 2, 0, 2)))
-
-    # Tool activity (most recent 6) — minimal, no emoji icons
-    if activities:
-        tbl.add_row(Text(""))
-        for a in activities[-6:]:
-            s = a["status"]
-            label_style = "dim" if s == "done" else "red dim" if s == "error" else "default"
-            tbl.add_row(Text(f"    {a['label']}", style=label_style))
 
     return tbl
 
@@ -1009,7 +1000,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 plan_t0 = time.monotonic()
                 plan_content = ""
                 plan_live = Live(
-                    _build_stream_display(agent, "", "", []),
+                    _build_stream_display(agent, "", ""),
                     console=console,
                     refresh_per_second=12,
                     transient=False,
@@ -1019,7 +1010,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                     async for event in agent.chat_stream(f"[PLAN] {inp}"):
                         if event["type"] == "content":
                             plan_content += event["text"]
-                            plan_live.update(_build_stream_display(agent, "", plan_content, []))
+                            plan_live.update(_build_stream_display(agent, "", plan_content))
                         elif event["type"] == "done":
                             break
                 except KeyboardInterrupt:
@@ -1055,7 +1046,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 activities: list[dict] = []
 
                 live = Live(
-                    _build_stream_display(agent, "", "", activities),
+                    _build_stream_display(agent, "", ""),
                     console=console,
                     refresh_per_second=12,
                     transient=False,
@@ -1066,9 +1057,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                     async for event in agent.chat_stream(inp):
                         if event["type"] == "content":
                             md_content += event["text"]
-                            live.update(
-                                _build_stream_display(agent, status_text, md_content, activities)
-                            )
+                            live.update(_build_stream_display(agent, status_text, md_content))
                         elif event["type"] == "tool_status":
                             status_text = event["label"]
                             is_dlg = event["label"].startswith("Delegating to ")
@@ -1079,17 +1068,13 @@ async def _interactive(agent_name: str | None = None) -> None:
                                     "delegation": is_dlg,
                                 }
                             )
-                            live.update(
-                                _build_stream_display(agent, status_text, md_content, activities)
-                            )
+                            live.update(_build_stream_display(agent, status_text, md_content))
                         elif event["type"] == "tool_done":
                             for a in activities:
                                 if a["label"] == event["label"] and a["status"] == "running":
                                     a["status"] = "done" if event.get("success") else "error"
                                     break
-                            live.update(
-                                _build_stream_display(agent, status_text, md_content, activities)
-                            )
+                            live.update(_build_stream_display(agent, status_text, md_content))
                         elif event["type"] == "done":
                             break
                 except KeyboardInterrupt:

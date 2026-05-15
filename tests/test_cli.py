@@ -572,7 +572,7 @@ class TestBuildStreamDisplay:
         from weather_agents.cli.main import _build_stream_display
 
         ag = _make_display_agent()
-        result = _build_stream_display(ag, "", "", [])
+        result = _build_stream_display(ag, "", "")
         assert isinstance(result, Table)
 
     def test_with_content_and_status(self):
@@ -581,7 +581,7 @@ class TestBuildStreamDisplay:
         from weather_agents.cli.main import _build_stream_display
 
         ag = _make_display_agent("rain")
-        result = _build_stream_display(ag, "reading file…", "Hello world", [])
+        result = _build_stream_display(ag, "reading file…", "Hello world")
         assert isinstance(result, Table)
 
     def test_with_activities(self):
@@ -590,12 +590,7 @@ class TestBuildStreamDisplay:
         from weather_agents.cli.main import _build_stream_display
 
         ag = _make_display_agent("frost")
-        activities = [
-            {"label": "read_file /tmp/x", "status": "done"},
-            {"label": "run_shell echo hi", "status": "running"},
-            {"label": "bad_tool", "status": "error"},
-        ]
-        result = _build_stream_display(ag, "", "content", activities)
+        result = _build_stream_display(ag, "", "content")
         assert isinstance(result, Table)
 
     def test_all_agents(self):
@@ -603,7 +598,7 @@ class TestBuildStreamDisplay:
 
         for name in ("fog", "rain", "frost", "snow", "dew"):
             ag = _make_display_agent(name)
-            _build_stream_display(ag, "status", "md text", [])
+            _build_stream_display(ag, "status", "md text")
 
 
 class TestBuildResponsePanel:
