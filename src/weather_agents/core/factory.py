@@ -28,6 +28,7 @@ from weather_agents.core.workspace import init_workspace, resolve_workspace_path
 from weather_agents.plugins.loader import PluginLoader
 from weather_agents.skills.loader import register_all_skills
 from weather_agents.tools.builtin import register_builtin_tools
+from weather_agents.tools.delegate import create_delegate_tool
 
 _log = get_logger("factory")
 
@@ -129,6 +130,9 @@ def create_system_context() -> SystemContext:
         )
         for name, cls in AGENT_CLASSES.items()
     }
+
+    global_registry.register(create_delegate_tool(agents))
+
     return SystemContext(
         config=config,
         bus=bus,

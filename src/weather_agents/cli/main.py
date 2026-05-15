@@ -217,10 +217,13 @@ def _build_stream_display(
         tbl.add_row(Text(""))
         for a in activities[-6:]:
             s = a["status"]
+            is_delegation = a.get("delegation", False)
             if s == "done":
                 icon, label_style = "[green]✓[/green]", "dim"
             elif s == "error":
                 icon, label_style = "[red]✗[/red]", "red dim"
+            elif is_delegation:
+                icon, label_style = "[yellow]⠿[/yellow]", "yellow"
             else:
                 icon, label_style = "[cyan]⠿[/cyan]", "default"
             row = Text()
@@ -695,7 +698,14 @@ async def _interactive(agent_name: str | None = None) -> None:
                         )
                     elif event["type"] == "tool_status":
                         status_text = event["label"]
-                        activities.append({"label": event["label"], "status": "running"})
+                        is_dlg = event["label"].startswith("Delegating to ")
+                        activities.append(
+                            {
+                                "label": event["label"],
+                                "status": "running",
+                                "delegation": is_dlg,
+                            }
+                        )
                         live.update(
                             _build_stream_display(agent, status_text, md_content, activities)
                         )
