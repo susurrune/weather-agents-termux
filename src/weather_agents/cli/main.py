@@ -1143,7 +1143,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 ):
                     _auto_continue_count += 1
                     inp = "请继续完成"
-                    console.print("  [dim]⋯ auto-continue ({}/3)[/dim]".format(_auto_continue_count))
+                    console.print(f"  [dim]⋯ auto-continue ({_auto_continue_count}/3)[/dim]")
                     continue  # Restart streaming
 
                 # — Choice menu: detect numbered options and show interactive popup —
