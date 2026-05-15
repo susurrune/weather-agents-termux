@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from weather_agents.core.skill import Skill, global_skill_registry
 
 
 def register_all_skills() -> None:
-    """Discover and register all built-in skills from both Python and Markdown sources."""
+    """Discover and register all built-in skills from Python, Markdown, and Claude Code sources."""
     for skill in _get_python_skills():
         global_skill_registry.register(skill)
     for skill in _get_markdown_skills():
+        if skill.name not in global_skill_registry.list_names():
+            global_skill_registry.register(skill)
+    for skill in _get_claude_skills():
         if skill.name not in global_skill_registry.list_names():
             global_skill_registry.register(skill)
 
@@ -69,3 +73,30 @@ def _get_markdown_skills() -> list[Skill]:
     except Exception:
         pass
     return []
+
+
+def _get_claude_skills() -> list[Skill]:
+    """Load skills from Claude Code's skill directory.
+
+    Scans ~/.claude/skills/ for SKILL.md files and parses them using the
+    standard YAML-frontmatter format. Skills with names already registered
+    (e.g. built-in Python skills) are skipped by the caller.
+    """
+    base_path = Path(os.path.expanduser("~/.claude/skills"))
+    if not base_path.is_dir():
+        return []
+
+    skills: list[Skill] = []
+    for entry in sorted(base_path.iterdir()):
+        if not entry.is_dir() or entry.name.startswith("_") or entry.name.startswith("."):
+            continue
+        skill_file = entry / "SKILL.md"
+        if not skill_file.is_file():
+            continue
+        try:
+            skill = Skill.from_markdown(skill_file)
+            if skill:
+                skills.append(skill)
+        except Exception:
+            continue
+    return skills

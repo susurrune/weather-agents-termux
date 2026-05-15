@@ -117,26 +117,25 @@ class BaseAgent:
     async def init(self) -> None:
         """Initialize agent (memory, subscriptions, skills, etc). Idempotent."""
         if self._base_system_prompt:
-            # Already initialized — don't double-register message bus subscription or
-            # re-append the system message.
             return
         await self.memory.init_db()
         self._base_system_prompt = self._resolve_system_prompt()
-        # Inject workspace path into system prompt so agents know where to
-        # read/write files.
         self._base_system_prompt = self._inject_workspace_info(self._base_system_prompt)
-        # Only inject system prompt if it isn't already at the head of short_term.
         if not any(m.role == "system" for m in self.memory.short_term):
             self.memory.add_message("system", self._base_system_prompt)
-        self._tools = (
-            self.tool_registry.get_tools(self.tool_names) or self.tool_registry.get_tools()
-        )
+        self._tools = self.tool_registry.get_tools()
         self._load_skills()
         self.bus.subscribe(self.name, self._handle_event)
 
     def _load_skills(self) -> None:
-        """Load pre-installed skills and merge their tool requirements."""
-        self._skills = self.skill_registry.get_skills(self.skill_names) if self.skill_names else []
+        """Load ALL registered skills into this agent (not just skill_names).
+
+        Every agent gets access to every skill in the registry. Individual
+        skills are activated/deactivated at runtime; skill_names controls
+        which are active by default.
+        """
+        self._skills = self.skill_registry.get_skills()
+        # Merge required_tools from all loaded skills into _tools
         for skill in self._skills:
             for tool_name in skill.required_tools:
                 tool = self.tool_registry.get(tool_name)
@@ -483,6 +482,7 @@ class BaseAgent:
         self.memory.add_message("assistant", "Got it, continuing with full context.")
         for m in recent:
             self.memory.short_term.append(m)
+        self.memory.prune_tool_messages()
 
         return f"compressed {len(to_summarize)} messages ({len(summary)} char summary)"
 
@@ -513,8 +513,8 @@ class BaseAgent:
         return int(usage["estimated_tokens"]) > max_ctx * 0.75
 
     def _active_tool_names(self) -> list[str]:
-        """Tool names available to this agent (base + merged from active skills)."""
-        names = list(self.tool_names)
+        """All tool names available to this agent (registry tools + active skill tools)."""
+        names = self.tool_registry.list_names()
         seen = set(names)
         for skill in self._skills:
             if skill.name not in self._active_skills:

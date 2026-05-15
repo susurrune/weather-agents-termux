@@ -159,42 +159,61 @@ class Memory:
         self._prune_dangling_tool_calls()
 
     def _prune_dangling_tool_calls(self) -> None:
-        """Remove assistant messages whose tool_calls lack matching tool responses.
+        """Remove orphaned tool_calls/tool message pairs from short-term memory.
 
-        When an assistant message is pruned, ALL tool messages that reference its
-        tool_calls must also be removed — otherwise the LLM receives orphaned
-        tool messages without a preceding tool_calls message, which causes
-        'Messages with role tool must be a response to a preceding message with
-        tool_calls' errors.
+        The LLM API requires every 'tool' role message to be preceded by an
+        'assistant' message whose tool_calls array contains the matching id.
+        Truncation or compaction can break this invariant by removing an
+        assistant message while leaving its tool responses behind. This method
+        restores correctness by:
+
+        1. Removing assistant messages whose tool_calls never got a response
+           (e.g. truncated mid-round).
+        2. Removing tool messages whose tool_call_id doesn't match any
+           preceding assistant's tool_calls (the reverse case — orphaned
+           tool responses whose assistant message was removed).
         """
         if not self.short_term:
             return
 
-        # Collect all tool_call_ids that have responses
+        # ── Pass 1: remove assistant messages with orphaned tool_calls ──
         responded_ids: set[str] = set()
         for msg in self.short_term:
             if msg.role == "tool" and msg.tool_call_id:
                 responded_ids.add(msg.tool_call_id)
 
-        # Find assistant messages with orphaned tool_calls
         pruned_tool_call_ids: set[str] = set()
         keep: list[Message] = []
         for msg in self.short_term:
             if msg.role == "assistant" and msg.tool_calls:
                 tc_ids = {tcid for tc in msg.tool_calls if (tcid := tc.get("id"))}
                 if tc_ids - responded_ids:
-                    # Some tool_calls never got a response — remove this message
                     pruned_tool_call_ids |= tc_ids
                     continue
             keep.append(msg)
 
-        if not pruned_tool_call_ids:
-            return
+        if pruned_tool_call_ids:
+            keep = [
+                m for m in keep if not (m.role == "tool" and m.tool_call_id in pruned_tool_call_ids)
+            ]
 
-        # Also remove all tool messages that reference any pruned tool_call
-        self.short_term = [
-            m for m in keep if not (m.role == "tool" and m.tool_call_id in pruned_tool_call_ids)
-        ]
+        # ── Pass 2: remove tool messages with no preceding assistant ──
+        seen_tc_ids: set[str] = set()
+        sanitized: list[Message] = []
+        for msg in keep:
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if tid := tc.get("id"):
+                        seen_tc_ids.add(tid)
+            elif msg.role == "tool" and msg.tool_call_id and msg.tool_call_id not in seen_tc_ids:
+                continue
+            sanitized.append(msg)
+
+        self.short_term = sanitized
+
+    def prune_tool_messages(self) -> None:
+        """Public wrapper around _prune_dangling_tool_calls."""
+        self._prune_dangling_tool_calls()
 
     async def _flush_pending(self) -> None:
         if self._pending_persists:
@@ -236,6 +255,7 @@ class Memory:
             other_msgs = [m for m in self.short_term if m.role != "system"]
             keep = self.config.short_term_limit - len(system_msgs)
             self.short_term = system_msgs + other_msgs[-keep:]
+            self._prune_dangling_tool_calls()
 
         if self._db and role != "system":
             try:

@@ -392,11 +392,12 @@ def _read_line_with_popup(agent, ctx) -> str:
     popup_visible = False
     selected_idx = 0
 
+    result = ""
     with Live(
         Table(show_header=False, box=None, padding=0),
         console=console,
         refresh_per_second=30,
-        transient=False,
+        transient=True,
     ) as live:
         while True:
             text = "".join(buffer)
@@ -418,10 +419,12 @@ def _read_line_with_popup(agent, ctx) -> str:
                 raise
 
             if key == "enter":
-                result = "".join(buffer).strip()
+                if popup_visible and filtered:
+                    result = filtered[selected_idx][0]
+                else:
+                    result = "".join(buffer).strip()
                 if result:
-                    console.print()
-                    return result
+                    break
                 continue
 
             if key == "esc":
@@ -468,6 +471,13 @@ def _read_line_with_popup(agent, ctx) -> str:
                         selected_idx = 0
                     elif popup_visible:
                         selected_idx = 0
+
+    if result:
+        color = AGENT_COLORS.get(agent.name, "cyan")
+        console.print(
+            f"  {agent.emoji} [bold {color}]{agent.display_name}[/bold {color}] ▸ {result}"
+        )
+    return result
 
 
 async def _interactive(agent_name: str | None = None) -> None:
@@ -598,7 +608,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                     f"  [dim]switched to[/dim] {agent.emoji} [bold {color}]{agent.display_name}[/bold {color}]"
                 )
                 continue
-            if cmd_lower.startswith("/"):
+            if cmd_lower.startswith("/") and cmd.strip() != "/":
                 _print_help()
                 continue
 

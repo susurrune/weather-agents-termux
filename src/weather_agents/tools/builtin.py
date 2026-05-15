@@ -676,24 +676,42 @@ _WEB_SEARCH_MAX_PER_SEC = 2  # throttle to avoid rate-limiting
 
 
 async def _web_search(query: str, num_results: int = 5, **kwargs) -> str:
-    """Search the web using DuckDuckGo (rate-limited)."""
+    """Search the web using available backends (DuckDuckGo, Bing). Rate-limited."""
     now = time.monotonic()
     global _web_search_timestamps
-    # Purge old timestamps
     _web_search_timestamps = [t for t in _web_search_timestamps if now - t < 1.0]
     if len(_web_search_timestamps) >= _WEB_SEARCH_MAX_PER_SEC:
         wait = 1.0 - (now - _web_search_timestamps[0]) + 0.05
         if wait > 0:
             await asyncio.sleep(wait)
+
+    results: list[dict] | None = None
+    errors: list[str] = []
+
+    # Try DuckDuckGo first
     try:
         results = await _ddg_api_search(query, min(num_results, 10))
-    except Exception:
-        results = await _ddg_html_fallback(query, min(num_results, 10))
+    except Exception as e:
+        errors.append(f"ddgs: {e}")
+        try:
+            results = await _ddg_html_fallback(query, min(num_results, 10))
+        except Exception as e2:
+            errors.append(f"ddg-html: {e2}")
+
+    # Try Bing if DDG failed and key is available
+    if not results:
+        bing_key = os.environ.get("BING_API_KEY")
+        if bing_key:
+            try:
+                results = await _bing_search(query, min(num_results, 10), bing_key)
+            except Exception as e3:
+                errors.append(f"bing: {e3}")
 
     _web_search_timestamps.append(time.monotonic())
 
     if not results:
-        return f"No results found for '{query}'"
+        detail = "; ".join(errors) if errors else "no backends available"
+        return f"No results found for '{query}' ({detail})"
 
     output_parts = [f"Search results for: {query}\n"]
     for i, r in enumerate(results, 1):
@@ -766,6 +784,30 @@ async def _ddg_html_fallback(query: str, num_results: int) -> list[dict]:
     if resp.status_code != 200:
         return []
     return _parse_ddg_html(resp.text, num_results)
+
+
+async def _bing_search(query: str, num_results: int, api_key: str) -> list[dict]:
+    """Search using Bing Web Search API (requires BING_API_KEY env var)."""
+    client = await _get_http()
+    resp = await client.get(
+        "https://api.bing.microsoft.com/v7.0/search",
+        params={"q": query, "count": num_results, "mkt": "zh-CN"},
+        headers={"Ocp-Apim-Subscription-Key": api_key},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    results = []
+    for r in (data.get("webPages") or {}).get("value", [])[:num_results]:
+        results.append(
+            {
+                "title": r.get("name", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("snippet", ""),
+            }
+        )
+    return results
 
 
 # -- Register all tools --
