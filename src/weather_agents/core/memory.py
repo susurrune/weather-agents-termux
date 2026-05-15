@@ -348,6 +348,8 @@ class Memory:
                 d["tool_call_id"] = m.tool_call_id
             if m.tool_calls:
                 d["tool_calls"] = m.tool_calls
+            if m.reasoning_content:
+                d["reasoning_content"] = m.reasoning_content
             msgs.append(d)
         return msgs
 
