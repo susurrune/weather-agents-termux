@@ -8,8 +8,8 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/susurrune/weather-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/susurrune/weather-agents/actions)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/susurrune/weather-agents)
+[![CI](https://github.com/susurrune/weather-agents-termux/actions/workflows/ci.yml/badge.svg)](https://github.com/susurrune/weather-agents-termux/actions)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/susurrune/weather-agents-termux)
 
 </div>
 
@@ -71,37 +71,52 @@
 
 ### 1. Install
 
-**推荐：用 [`pipx`](https://pipx.pypa.io/) 全局安装**——它会为 `wa` 建一个独立 venv，但把命令放到 PATH 上，不与你任何其它项目冲突。
+#### Termux Ubuntu（推荐，一条命令）
+
+在 Termux 中通过 Ubuntu (PRoot) 运行时，使用内置安装脚本——它会自动处理 uv 安装、ensurepip 修复和 PATH 配置：
 
 ```bash
-# 一条命令（自动安装 pipx 并装好 weather-agents 与全部依赖）
-python -m pip install --user pipx && python -m pipx install git+https://github.com/susurrune/weather-agents.git
+bash <(curl -fsSL https://raw.githubusercontent.com/susurrune/weather-agents-termux/main/install.sh)
 ```
 
-PowerShell 用 `;` 替代 `&&`：
+安装完成后：
 
-```powershell
-python -m pip install --user pipx; python -m pipx install git+https://github.com/susurrune/weather-agents.git
+```bash
+source ~/.bashrc   # 让 PATH 生效（或重新打开终端）
+wa init            # 配置向导
+wa chat            # 开始对话
 ```
-
-> 装完后 `wa` 会出现在 `~/.local/bin`（Linux/macOS）或 `%USERPROFILE%\.local\bin`（Windows）。如果命令不可用，运行 `pipx ensurepath` 然后重开终端。
 
 升级 / 卸载：
 
 ```bash
-pipx upgrade weather-agents
-pipx uninstall weather-agents
+uv tool upgrade weather-agents
+uv tool uninstall weather-agents
 ```
 
-<details>
-<summary>不想用 pipx？</summary>
+> **Termux 注意事项**：PRoot 文件系统不支持硬链接，`install.sh` 会自动设置 `UV_LINK_MODE=copy` 写入 `~/.bashrc`，无需手动配置。
+
+#### 标准 Linux / macOS
 
 ```bash
-pip install --user git+https://github.com/susurrune/weather-agents.git
+# 用 uv（推荐）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install git+https://github.com/susurrune/weather-agents-termux.git
 ```
 
-注意：必须确保 `wa` 命令使用的 Python 和 `pip install` 用的 Python 是同一个，否则会出现 `ModuleNotFoundError: weather_agents`。
-</details>
+```bash
+# 或用 pipx
+python -m pip install --user pipx
+python -m pipx install git+https://github.com/susurrune/weather-agents-termux.git
+```
+
+#### Windows（PowerShell）
+
+```powershell
+python -m pip install --user pipx; python -m pipx install git+https://github.com/susurrune/weather-agents-termux.git
+```
+
+> 装完后 `wa` 和 `wacode` 都会出现在 `~/.local/bin`（Linux/macOS）或 `%USERPROFILE%\.local\bin`（Windows）。如果命令不可用，运行 `pipx ensurepath` 或 `uv tool update-shell` 然后重开终端。
 
 ### 2. Configure
 
@@ -144,6 +159,8 @@ wa task "设计并实现一个 URL 短链接服务"
 | `wa config list\|set\|delete\|models` | 查看/修改/删除配置 · 列出可用模型 |
 | `wa memory status\|clear` | 查看/清除记忆 |
 | `wa --version` / `wa version` | 版本信息 |
+
+> `wacode` 是 `wa` 的别名，两者完全等价。
 
 ### Interactive Commands
 
@@ -268,7 +285,7 @@ mcp:
   servers:
     - name: "filesystem"
       command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/home"]
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "~"]
       transport: "stdio"
       enabled: true
 ```
@@ -308,7 +325,7 @@ workspace/
 
 ```bash
 > /workspace              # 查看当前工作空间路径和磁盘信息
-> /workspace set D:\my    # 自定义工作空间路径
+> /workspace set /my/dir  # 自定义工作空间路径
 > /workspace auto         # 恢复自动检测
 ```
 
@@ -354,7 +371,7 @@ memory:
 # 安装开发依赖
 pip install -e ".[dev]"
 
-# 测试（281 tests, 55%+ 覆盖率）
+# 测试（371+ tests, 55%+ 覆盖率）
 pytest tests/ -v --cov=src/ --cov-fail-under=55
 
 # Lint

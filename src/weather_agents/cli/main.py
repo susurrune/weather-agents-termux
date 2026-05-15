@@ -1977,7 +1977,6 @@ async def _run_task(goal: str, agents=None) -> None:
     try:
         from weather_agents.core.factory import orchestrate_task
 
-
         async def _on_start(t):
             ict = icon_text(t.assigned_to or "")
             sp = AGENT_SPINNERS.get(t.assigned_to or "", "dots")
