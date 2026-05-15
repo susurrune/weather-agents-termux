@@ -331,8 +331,10 @@ def _numbered_blocks(text: str) -> list[str]:
     items: list[str] = []
     for line in text.split("\n"):
         stripped = line.strip()
-        if re.match(r"^(?:\d+|[A-Za-z])[.、\)\s]\s*\S", stripped):
-            items.append(stripped)
+        # Strip leading visual decorations (box-drawing, checkboxes, bullets)
+        cleaned = re.sub(r"^[─-╿☐☑☒◦●○▪▸➔‣•★☆✦※*\-\s]+", "", stripped).strip()
+        if re.match(r"^(?:\d+|[A-Za-z])[.、\)\s]\s*\S", cleaned):
+            items.append(cleaned)
     return items if len(items) >= 2 else []
 
 
@@ -355,7 +357,9 @@ def _parse_simple_choices(text: str) -> list[str]:
 
     items: list[str] = []
     for line in text.split("\n"):
-        m = re.match(r"^\s*(?:\d+|[A-Za-z])[.、\)\s]\s*(.+)$", line)
+        # Strip leading visual decorations (box-drawing, checkboxes, bullets)
+        cleaned = re.sub(r"^[─-╿☐☑☒◦●○▪▸➔‣•★☆✦※*\-–—\s]+", "", line).strip()
+        m = re.match(r"^(?:\d+|[A-Za-z])[.、\)\s]\s*(.+)$", cleaned)
         if not m:
             continue
         content = m.group(1).strip()
