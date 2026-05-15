@@ -27,11 +27,11 @@ def _make_agent(name: str, display_name: str = "", emoji: str = "") -> Mock:
 @pytest.fixture
 def agent_map():
     return {
-        "fog": _make_agent("fog", "雾", "🌫️"),
-        "rain": _make_agent("rain", "雨", "🌧️"),
-        "frost": _make_agent("frost", "霜", "❄️"),
-        "snow": _make_agent("snow", "雪", "🌨️"),
-        "dew": _make_agent("dew", "露", "💧"),
+        "fog": _make_agent("fog", "雾", "~~"),
+        "rain": _make_agent("rain", "雨", "//"),
+        "frost": _make_agent("frost", "霜", "**"),
+        "snow": _make_agent("snow", "雪", ".."),
+        "dew": _make_agent("dew", "露", ",,"),
     }
 
 

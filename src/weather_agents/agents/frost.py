@@ -6,7 +6,7 @@ from weather_agents.core.agent import BaseAgent
 class FrostAgent(BaseAgent):
     name = "frost"
     display_name = "霜"
-    emoji = "❄️"
+    emoji = "+"
     specialty = "审查优化"
     tool_names = [
         "read_file",
@@ -25,7 +25,7 @@ class FrostAgent(BaseAgent):
         "http_get",
         "http_post",
     ]
-    skill_names = ["code_reviewer", "security_auditor", "performance_checker"]
+    skill_names = ["code_reviewer", "security_auditor", "performance_checker", "self_evolve"]
 
     system_prompt = """你是 Weather Agents 的「霜」— 精准凝结，审视每一处细节。
 

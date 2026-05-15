@@ -6,6 +6,7 @@ import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import cast
 
 from weather_agents.core.bus import Event, EventType, MessageBus
 from weather_agents.core.config import AppConfig
@@ -16,6 +17,10 @@ from weather_agents.core.skill import Skill, SkillRegistry
 from weather_agents.core.tool import Tool, ToolRegistry
 
 _log = get_logger("agent")
+
+# Set by chat_stream() each call — gives tool handlers (use_skill, list_skills)
+# a way to reach the agent that is currently processing.
+_call_agent: BaseAgent | None = None
 
 
 class AgentState(StrEnum):
@@ -114,6 +119,68 @@ class BaseAgent:
             )
         return prompt + ws_block
 
+    def _inject_behavior_rules(self, prompt: str) -> str:
+        """Append concise behavior rules to the system prompt."""
+        lang = getattr(self.config.llm, "language", "zh")
+        if lang == "en":
+            rules = (
+                "\n\n## Behavior\n"
+                '1. Execute tools immediately — no "I will..." or "Let me..." narration before tool calls. Just call them.\n'
+                "2. After completing work: give a 1-2 sentence concise report, no log-style verbosity.\n"
+                "3. Do not use decorative separator lines (---, ***, ___, etc) — the interface handles visual separation."
+            )
+        else:
+            rules = (
+                "\n\n## 行为守则\n"
+                "1. 执行工具前不赘述 — 不说「我将要...」「让我先...」，直接调用\n"
+                "2. 完成后用 1-2 句简洁汇报结果，不要日志式的冗长叙述\n"
+                "3. 不要使用 ---、***、___ 等装饰性分隔线 — 界面自有视觉分隔"
+            )
+        return prompt + rules
+
+    def _inject_programming_wisdom(self, prompt: str) -> str:
+        """Append programming capability and self-iteration awareness."""
+        lang = getattr(self.config.llm, "language", "zh")
+        if lang == "en":
+            wisdom = (
+                "\n\n## Engineering\n"
+                "You are a top-tier programming agent:\n"
+                "1. Code quality: type safety, error handling, readability, testability\n"
+                "2. Debugging: isolate root cause → understand → fix → verify with tests\n"
+                "3. Code review: security, performance, maintainability, design patterns\n"
+                "4. Self-discipline: study existing code before writing, match project style, run tests before reporting done\n"
+                "5. Self-evolution: you can read, analyze, and modify Weather Agents' own source to improve the system"
+            )
+        else:
+            wisdom = (
+                "\n\n## 工程能力\n"
+                "你是顶级编程智能体：\n"
+                "1. 代码质量：类型安全、错误处理、可读性、可测试性\n"
+                "2. 调试：定位根因 → 理解 → 修复 → 用测试验证\n"
+                "3. 代码审查：安全性、性能、可维护性、设计模式\n"
+                "4. 自律：先阅读既有代码再动手，风格与项目保持一致，完成前跑测试\n"
+                "5. 自我进化：你可以阅读、分析和修改 Weather Agents 自身代码来改进系统"
+            )
+        return prompt + wisdom
+
+    def reinit_language(self) -> None:
+        """Rebuild system prompt with current language setting.
+
+        Called after a language switch (``/language`` command) to regenerate
+        the system prompt in the new language in-place, without losing
+        conversation history.
+        """
+        self._base_system_prompt = ""
+        self._base_system_prompt = self._resolve_system_prompt()
+        self._base_system_prompt = self._inject_workspace_info(self._base_system_prompt)
+        self._base_system_prompt = self._inject_behavior_rules(self._base_system_prompt)
+        self._base_system_prompt = self._inject_programming_wisdom(self._base_system_prompt)
+        for msg in self.memory.short_term:
+            if msg.role == "system":
+                msg.content = self._base_system_prompt
+                return
+        self.memory.add_message("system", self._base_system_prompt)
+
     async def init(self) -> None:
         """Initialize agent (memory, subscriptions, skills, etc). Idempotent."""
         if self._base_system_prompt:
@@ -121,6 +188,8 @@ class BaseAgent:
         await self.memory.init_db()
         self._base_system_prompt = self._resolve_system_prompt()
         self._base_system_prompt = self._inject_workspace_info(self._base_system_prompt)
+        self._base_system_prompt = self._inject_behavior_rules(self._base_system_prompt)
+        self._base_system_prompt = self._inject_programming_wisdom(self._base_system_prompt)
         if not any(m.role == "system" for m in self.memory.short_term):
             self.memory.add_message("system", self._base_system_prompt)
         self._tools = self.tool_registry.get_tools()
@@ -128,19 +197,81 @@ class BaseAgent:
         self.bus.subscribe(self.name, self._handle_event)
 
     def _load_skills(self) -> None:
-        """Load ALL registered skills into this agent (not just skill_names).
+        """Store skill references for on-demand activation.
 
-        Every agent gets access to every skill in the registry. Individual
-        skills are activated/deactivated at runtime; skill_names controls
-        which are active by default.
+        Skills are NOT pre-loaded (no system prompts, no required_tools merged).
+        The agent calls list_skills / use_skill tools to discover and activate
+        skills on demand — saves tokens by keeping inactive skill text out of
+        the context.
         """
         self._skills = self.skill_registry.get_skills()
-        # Merge required_tools from all loaded skills into _tools
-        for skill in self._skills:
-            for tool_name in skill.required_tools:
-                tool = self.tool_registry.get(tool_name)
-                if tool and tool not in self._tools:
-                    self._tools.append(tool)
+        self._register_skill_tools()
+
+    def _register_skill_tools(self) -> None:
+        """Register use_skill / list_skills for LLM-driven skill activation.
+
+        The LLM can call list_skills() to see available skills, then
+        use_skill(name) to activate one.  The system prompt is rebuilt only
+        on activation — no token cost for inactive skills.
+
+        Registered once globally; _call_agent (set by chat_stream) ensures
+        the handler reaches the agent that made the call.
+        """
+        if self.tool_registry.get("use_skill"):
+            return  # already registered (shared global registry)
+
+        from weather_agents.core.tool import ToolParameter
+
+        async def _use(name: str) -> str:
+            agent = _call_agent
+            if agent is None:
+                return "Error: no active agent"
+            if agent.activate_skill(name):
+                skill = next((s for s in agent._skills if s.name == name), None)
+                desc = skill.description if skill else ""
+                return f"✓ Skill '{name}' activated: {desc}"
+            return f"✗ Skill '{name}' not found. Call list_skills to see available options."
+
+        async def _list() -> str:
+            agent = _call_agent
+            if agent is None:
+                return "Error: no active agent"
+            skills = agent.get_available_skills()
+            if not skills:
+                return "No skills available."
+            lines = [f"• {s['name']}: {s['description']}" for s in skills]
+            return "Available skills:\n" + "\n".join(lines)
+
+        self.tool_registry.register(
+            Tool(
+                name="list_skills",
+                description=(
+                    "List all available skills with their names and descriptions. "
+                    "Use this first to discover what skills you can activate."
+                ),
+                parameters=[],
+                handler=_list,
+            )
+        )
+        self.tool_registry.register(
+            Tool(
+                name="use_skill",
+                description=(
+                    "Activate a named skill to gain specialized capabilities "
+                    "(e.g. code_reviewer for code review, web_research for research). "
+                    "Call list_skills first to see available options."
+                ),
+                parameters=[
+                    ToolParameter(
+                        name="name",
+                        type="string",
+                        description="The name of the skill to activate",
+                        required=True,
+                    ),
+                ],
+                handler=_use,
+            )
+        )
 
     def activate_skill(self, name: str) -> bool:
         """Activate a skill by name. Invokes handler for custom tool injection.
@@ -287,6 +418,8 @@ class BaseAgent:
 
         Yields: {"type": "content", "text": "..."} | {"type": "tool_status", "label": "..."} | {"type": "done"}
         """
+        global _call_agent
+        _call_agent = self
         await self._set_state(AgentState.THINKING)
         self.memory.add_message("user", message)
         assistant_stored = False
@@ -379,7 +512,7 @@ class BaseAgent:
                                     extra={
                                         "tool": tool_name,
                                         "agent": self.name,
-                                        "args": dict(tool_args) if tool_args else {},
+                                        "tool_args": dict(tool_args) if tool_args else {},
                                     },
                                 )
                             await self._set_state(AgentState.ACTING)
@@ -605,7 +738,7 @@ class BaseAgent:
                             extra={
                                 "tool": tool_name,
                                 "agent": self.name,
-                                "args": dict(tool_args) if tool_args else {},
+                                "tool_args": dict(tool_args) if tool_args else {},
                             },
                         )
                     await self._set_state(AgentState.ACTING)
@@ -719,43 +852,123 @@ _TOOL_LABELS: dict[str, str] = {
 
 
 def _parse_tool_args(raw: str) -> dict | None:
-    """Parse tool call JSON with basic repair for common LLM output issues."""
+    """Parse tool call JSON with multi-stage repair for LLM output quirks.
+
+    Handles: markdown fences, Python literals, backtick quotes, single quotes,
+    unquoted keys, trailing commas, key=value syntax, unquoted string values,
+    trailing text, and unbalanced braces.
+    """
     import re as _re
 
     if not raw or not raw.strip():
         return None
 
-    rv: dict
-
-    # Try standard parse first
-    try:
-        rv = json.loads(raw)
-        return rv
-    except json.JSONDecodeError:
-        pass
-
     cleaned = raw.strip()
 
-    # Fix single-quote strings: {'key': 'value'} → {"key": "value"}
-    if cleaned.startswith("'") or ("'" in cleaned and '"' not in cleaned):
-        cleaned = cleaned.replace("'", '"')
-
-    # Fix unquoted keys: {key: "value"} → {"key": "value"}
-    cleaned = _re.sub(r'(?<!\{)("[^"]*"\s*:\s*)', lambda m: m.group(1), cleaned)
-    cleaned = _re.sub(r"([{,]\s*)(\w[\w\d_]*)(\s*:)", r'\1"\2"\3', cleaned)
-
-    # Fix trailing commas before ] or }
-    cleaned = _re.sub(r",\s*([}\]])", r"\1", cleaned)
-
-    # Fix trailing comma at end
-    cleaned = cleaned.rstrip(",").rstrip()
-
-    # Try again
+    # ── 1. Direct parse ────────────────────────────────────────────────────
     try:
-        rv = json.loads(cleaned)
-        return rv
+        return cast(dict, json.loads(cleaned))
     except json.JSONDecodeError:
         pass
+
+    # ── 2. Strip markdown code fences ──────────────────────────────────────
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+        cleaned = cleaned.rsplit("```", 1)[0] if "```" in cleaned else cleaned
+        cleaned = cleaned.strip()
+        try:
+            return cast(dict, json.loads(cleaned))
+        except json.JSONDecodeError:
+            pass
+
+    # ── 3. Extract first JSON object/array from surrounding text ───────────
+    obj_match = _re.search(r"(\{.*\}|\[.*\])", cleaned, _re.DOTALL)
+    if obj_match:
+        cleaned = obj_match.group(1)
+        try:
+            return cast(dict, json.loads(cleaned))
+        except json.JSONDecodeError:
+            pass
+
+    # ── 4. Key=value format: query="weather", count=5 → {"query": "weather", "count": 5}
+    #    Typically from models that emit function-call-style rather than JSON.
+    if not cleaned.startswith("{") and _re.search(r"\b\w[\w\d_]*\s*=", cleaned):
+        kv_pairs: list[str] = []
+        for m in _re.finditer(r'(\w[\w\d_]*)\s*=\s*("[^"]*"|\'[^\']*\'|[\w\d_.+-]+)', cleaned):
+            key = m.group(1)
+            val = m.group(2)
+            if val.startswith("'") and val.endswith("'"):
+                val = '"' + val[1:-1] + '"'
+            kv_pairs.append(f'"{key}": {val}')
+        if kv_pairs:
+            json_str = "{" + ", ".join(kv_pairs) + "}"
+            json_str = _re.sub(r":\s*None\s*([,}])", r": null\1", json_str)
+            json_str = _re.sub(r":\s*True\s*([,}])", r": true\1", json_str)
+            json_str = _re.sub(r":\s*False\s*([,}])", r": false\1", json_str)
+            return cast(dict, json.loads(json_str))
+
+    # ── 5. Python → JSON literals ──────────────────────────────────────────
+    #    Must happen before quote transformations to avoid corrupting strings.
+    cleaned = _re.sub(r"\bNone\b", "null", cleaned)
+    cleaned = _re.sub(r"\bTrue\b", "true", cleaned)
+    cleaned = _re.sub(r"\bFalse\b", "false", cleaned)
+
+    # ── 6. Backtick → double quote ────────────────────────────────────────
+    cleaned = cleaned.replace("`", '"')
+
+    # ── 7. Fix single-quote strings ────────────────────────────────────────
+    if "'" in cleaned:
+        cleaned = cleaned.replace("'", '"')
+
+    # ── 8. Fix unquoted keys: {key: "value"} → {"key": "value"} ────────────
+    cleaned = _re.sub(r"([{,]\s*)(\w[\w\d_]*)(\s*:)", r'\1"\2"\3', cleaned)
+
+    # ── 9. Fix trailing commas before ] or } ───────────────────────────────
+    cleaned = _re.sub(r",\s*([}\]])", r"\1", cleaned)
+    cleaned = cleaned.rstrip(",").strip()
+
+    # ── 10. Fix unquoted string values: {"key": bare word} → {"key": "bare word"} ──
+    cleaned = _re.sub(
+        r"(:\s*)([a-zA-Z_.][a-zA-Z0-9_ ./\\@.\-+#~$]*?)(\s*[,}\]])",
+        lambda m: (
+            m.group(0)
+            if m.group(2) in ("null", "true", "false")
+            or m.group(2).lstrip("-").replace(".", "").isdigit()
+            or m.group(2).startswith(('"', "{", "["))
+            else f'{m.group(1)}"{m.group(2)}"{m.group(3)}'
+        ),
+        cleaned,
+    )
+
+    # ── 11. Attempt parse ──────────────────────────────────────────────────
+    try:
+        return cast(dict, json.loads(cleaned))
+    except json.JSONDecodeError:
+        pass
+
+    # ── 12. Balanced-brace extraction ──────────────────────────────────────
+    depth = 0
+    start = -1
+    for i, ch in enumerate(cleaned):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    return cast(dict, json.loads(cleaned[start : i + 1]))
+                except json.JSONDecodeError:
+                    pass
+
+    # If a JSON object was started but never closed, try auto-closing
+    if start >= 0 and depth > 0:
+        candidate = cleaned[start:] + "}" * depth
+        try:
+            return cast(dict, json.loads(candidate))
+        except json.JSONDecodeError:
+            pass
 
     return None
 

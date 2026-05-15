@@ -41,11 +41,11 @@ AGENT_CLASSES = {
 }
 
 AGENT_EMOJI = {
-    "fog": "🌫️",
-    "rain": "🌧️",
-    "frost": "❄️",
-    "snow": "🌨️",
-    "dew": "💧",
+    "fog": "~",
+    "rain": "/",
+    "frost": "+",
+    "snow": "·",
+    "dew": ",",
 }
 
 AGENT_COLORS: dict[str, str] = {

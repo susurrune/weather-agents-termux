@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from weather_agents.core.bus import Event, EventType
+from weather_agents.core.icons import icon_text
 from weather_agents.core.logger import get_logger
 from weather_agents.core.tool import Tool, ToolParameter
 
@@ -14,11 +15,11 @@ if TYPE_CHECKING:
 _log = get_logger("delegate")
 
 AGENT_SPECIALTIES: dict[str, str] = {
-    "fog": "research / code analysis / knowledge retrieval",
-    "rain": "code generation / content creation / data transformation",
-    "frost": "code review / security audit / performance analysis",
-    "snow": "task planning / architecture design / workflow management",
-    "dew": "command execution / deployment / API integration",
+    "fog": "research / code analysis / knowledge retrieval / information synthesis",
+    "rain": "code generation / content creation / data transformation / multi-file projects",
+    "frost": "code review / security audit / performance analysis / debugging",
+    "snow": "task planning / architecture design / workflow management / codebase refactoring",
+    "dew": "command execution / deployment / API integration / system operations",
 }
 
 _MAX_RESULT_CHARS = 8000
@@ -95,7 +96,7 @@ def create_delegate_tool(agent_map: dict[str, BaseAgent]) -> Tool:
                 content = content[:_MAX_RESULT_CHARS] + "\n\n… (truncated)"
 
             status = "completed" if result.success else "failed"
-            header = f"[{target.emoji} {target.display_name}] {status}"
+            header = f"[{icon_text(target.name)} {target.display_name}] {status}"
 
             _log.info(
                 "delegation_done",

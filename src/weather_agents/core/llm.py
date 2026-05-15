@@ -602,21 +602,20 @@ class LLMClient:
                             if tc_delta.function.arguments:
                                 acc["function"]["arguments"] += tc_delta.function.arguments
 
-                # Emit completed tool calls (when we have both id and name)
-                done_indices = []
-                for idx, tc in tool_call_acc.items():
-                    if tc["id"] and tc["function"]["name"]:
-                        done_indices.append(idx)
-                        yield StreamEvent(
-                            type="tool_call",
-                            tool_call={
-                                "id": tc["id"],
-                                "type": "function",
-                                "function": tc["function"],
-                            },
-                        )
-                for idx in done_indices:
-                    del tool_call_acc[idx]
+        # Emit fully accumulated tool calls after all streaming chunks are processed.
+        # Must NOT emit mid-stream: tool call arguments arrive across multiple chunks
+        # (id/name in the first, arguments incrementally after).
+        for idx in sorted(tool_call_acc.keys()):
+            tc = tool_call_acc[idx]
+            if tc["id"] and tc["function"]["name"]:
+                yield StreamEvent(
+                    type="tool_call",
+                    tool_call={
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": tc["function"],
+                    },
+                )
 
         elapsed = time.monotonic() - start
         prompt_tokens = 0

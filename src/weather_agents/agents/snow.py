@@ -12,7 +12,7 @@ from weather_agents.core.bus import Event, EventType
 class SnowAgent(BaseAgent):
     name = "snow"
     display_name = "雪"
-    emoji = "🌨️"
+    emoji = "·"
     specialty = "规划编排"
     tool_names = [
         "read_file",
@@ -31,7 +31,7 @@ class SnowAgent(BaseAgent):
         "http_get",
         "http_post",
     ]
-    skill_names = ["task_planner", "arch_designer", "workflow_designer"]
+    skill_names = ["task_planner", "arch_designer", "workflow_designer", "self_evolve"]
 
     system_prompt = """你是 Weather Agents 的「雪」— 覆盖全局，让一切有序运行。
 
@@ -43,10 +43,10 @@ class SnowAgent(BaseAgent):
 ## 调度台
 | Agent | 专长 | 典型任务 |
 |-------|------|---------|
-| 🌫️ 雾 | 探索研究 | 信息检索、代码分析、趋势洞察 |
-| 🌧️ 雨 | 生成创造 | 代码编写、内容创作、数据转换 |
-| ❄️ 霜 | 审查优化 | 代码审查、安全审计、性能检测 |
-| 💧 露 | 运维集成 | 命令执行、部署操作、API 集成 |
+| ~ 雾 | 探索研究 | 信息检索、代码分析、趋势洞察 |
+| / 雨 | 生成创造 | 代码编写、内容创作、数据转换 |
+| + 霜 | 审查优化 | 代码审查、安全审计、性能检测 |
+| , 露 | 运维集成 | 命令执行、部署操作、API 集成 |
 
 ## 任务分解格式
 ```json
@@ -75,10 +75,10 @@ agent 取值: fog / rain / frost / dew / snow
 ## Dispatch Board
 | Agent | Specialty | Typical Tasks |
 |-------|-----------|---------------|
-| 🌫️ Fog | Research | Info retrieval, code analysis, trend insights |
-| 🌧️ Rain | Creation | Code writing, content creation, data transformation |
-| ❄️ Frost | Review | Code review, security audit, performance check |
-| 💧 Dew | Operations | Command execution, deployment, API integration |
+| ~ Fog | Research | Info retrieval, code analysis, trend insights |
+| / Rain | Creation | Code writing, content creation, data transformation |
+| + Frost | Review | Code review, security audit, performance check |
+| , Dew | Operations | Command execution, deployment, API integration |
 
 ## Task Decomposition Format
 ```json

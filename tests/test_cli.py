@@ -478,7 +478,7 @@ def _make_agent_map():
         ag.display_name = {"fog": "雾", "rain": "雨", "frost": "霜", "snow": "雪", "dew": "露"}[
             name
         ]
-        ag.emoji = {"fog": "🌫️", "rain": "🌧️", "frost": "❄️", "snow": "🌨️", "dew": "💧"}[name]
+        ag.emoji = {"fog": "~~", "rain": "//", "frost": "**", "snow": "..", "dew": ",,"}[name]
         ag.state = AgentState.IDLE
         ag.chat = AsyncMock(return_value="mock response")
         ag.chat_stream = lambda _msg, _ag=ag: _async_iter(
@@ -717,10 +717,14 @@ class TestPrintWelcome:
 
 class TestPrintHelp:
     def test_smoke(self):
+        from unittest.mock import MagicMock
+
         from weather_agents.cli.main import _print_help
 
+        ctx = MagicMock()
+        ctx.config.llm.language = "zh"
         with patch("weather_agents.cli.main.console.print"):
-            _print_help()
+            _print_help(ctx)
 
 
 class TestPrintStatus:
@@ -733,7 +737,7 @@ class TestPrintStatus:
             ag.get_status.return_value = {
                 "name": name,
                 "display_name": name.capitalize(),
-                "emoji": "🌫️",
+                "emoji": "~~",
                 "specialty": "test",
                 "state": "idle",
                 "skills": [{"name": "code_reviewer", "active": True}],
@@ -750,7 +754,7 @@ class TestPrintStatus:
             ag.get_status.return_value = {
                 "name": name,
                 "display_name": name.capitalize(),
-                "emoji": "🌫️",
+                "emoji": "~~",
                 "specialty": "test",
                 "state": "busy",
                 "skills": [],

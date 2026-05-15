@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <linearGradient id="sg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#b0c4de"/>
+    </linearGradient>
+  </defs>
+  <!-- Six-point snowflake -->
+  <!-- Main axes -->
+  <line x1="24" y1="4" x2="24" y2="44" stroke="url(#sg)" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
+  <line x1="4" y1="24" x2="44" y2="24" stroke="url(#sg)" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
+  <line x1="10" y1="10" x2="38" y2="38" stroke="url(#sg)" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <line x1="10" y1="38" x2="38" y2="10" stroke="url(#sg)" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <!-- Branch ends -->
+  <line x1="24" y1="4" x2="20" y2="10" stroke="#ffffff" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="24" y1="4" x2="28" y2="10" stroke="#ffffff" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="24" y1="44" x2="20" y2="38" stroke="#ffffff" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="24" y1="44" x2="28" y2="38" stroke="#ffffff" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="4" y1="24" x2="10" y2="20" stroke="#b0c4de" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="4" y1="24" x2="10" y2="28" stroke="#b0c4de" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="44" y1="24" x2="38" y2="20" stroke="#b0c4de" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <line x1="44" y1="24" x2="38" y2="28" stroke="#b0c4de" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+  <!-- Center -->
+  <circle cx="24" cy="24" r="3" fill="#ffffff" opacity="0.5"/>
+  <circle cx="24" cy="24" r="1.5" fill="#ffffff" opacity="0.8"/>
+</svg>

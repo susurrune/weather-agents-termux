@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -17,6 +18,7 @@ from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -41,9 +43,9 @@ from weather_agents.core.config import (
 from weather_agents.core.factory import (
     AGENT_CLASSES,
     AGENT_COLORS,
-    AGENT_EMOJI,
     create_system_context,
 )
+from weather_agents.core.icons import icon_text
 from weather_agents.core.workspace import (
     detect_best_workspace_root,
     format_bytes,
@@ -147,6 +149,15 @@ def _get_key() -> str:
 app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=True)
 console = Console()
 
+# Per-agent animated spinner themes for streaming / status indicators
+AGENT_SPINNERS: dict[str, str] = {
+    "fog": "dots",
+    "rain": "line",
+    "frost": "star",
+    "snow": "dots2",
+    "dew": "bounce",
+}
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -169,17 +180,19 @@ def _global_options(
     _ = version  # Consumed by callback above.
 
 
-# -- Spinner + display helpers -----------------------------------------------
+def _strip_hr(markup: str) -> str:
+    """Remove decorative horizontal rule lines from LLM markdown output.
 
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-_spin_idx = 0
-
-
-def _next_spin() -> str:
-    global _spin_idx
-    c = _SPINNER[_spin_idx % len(_SPINNER)]
-    _spin_idx += 1
-    return c
+    Handles ASCII and Unicode separator characters (dashes, underscores,
+    asterisks, em-dash, horizontal-bar, box-drawing) — including patterns
+    with spaces between characters like ``- - -``.
+    """
+    return re.sub(
+        r"^[ \t]*([\-_*—–―─━])(?:\s*\1){2,}[ \t]*\n?",
+        "",
+        markup,
+        flags=re.MULTILINE,
+    )
 
 
 def _build_stream_display(
@@ -188,50 +201,40 @@ def _build_stream_display(
     md_content: str,
     activities: list[dict],
 ) -> Table:
-    """Build the Live renderable during streaming: spinner + content + tool activity."""
+    """Live renderable during streaming: agent header + content + tool activity."""
     color = AGENT_COLORS.get(agent.name, "white")
-    spin = _next_spin()
+    spinner_name = AGENT_SPINNERS.get(agent.name, "dots")
 
     tbl = Table(show_header=False, box=None, padding=0, expand=True)
     tbl.add_column(ratio=1)
 
-    # Header row: spinner · agent · status
-    header = Text()
-    header.append(f"  {spin} ", style="dim")
-    header.append(f"{agent.emoji} ", style=f"bold {color}")
-    header.append(agent.display_name, style=f"bold {color}")
+    # Header: animated spinner · agent name · status
+    name_text = Text()
+    name_text.append(f" {agent.display_name}", style=f"bold {color}")
     if status_text:
-        header.append("  ·  ", style="dim")
-        header.append(status_text, style="dim")
-    tbl.add_row(header)
+        name_text.append("  ", style="dim")
+        name_text.append(status_text, style="dim")
 
-    # Thin separator
-    tbl.add_row(Text("  " + "─" * min(console.width - 4, 78), style="dim"))
+    header_row = Table(show_header=False, box=None, padding=0, expand=True)
+    header_row.add_column(width=3, justify="center")
+    header_row.add_column(ratio=1)
+    header_row.add_row(
+        Spinner(spinner_name, style=f"bold {color}"),
+        name_text,
+    )
+    tbl.add_row(header_row)
 
     # Streamed content
     if md_content:
-        tbl.add_row(Padding(Markdown(md_content), pad=(0, 2, 0, 2)))
+        tbl.add_row(Padding(Markdown(_strip_hr(md_content)), pad=(0, 2, 0, 2)))
 
-    # Tool activity lines (most recent 6)
+    # Tool activity (most recent 6) — minimal, no emoji icons
     if activities:
         tbl.add_row(Text(""))
         for a in activities[-6:]:
             s = a["status"]
-            is_delegation = a.get("delegation", False)
-            if s == "done":
-                icon, label_style = "[green]✓[/green]", "dim"
-            elif s == "error":
-                icon, label_style = "[red]✗[/red]", "red dim"
-            elif is_delegation:
-                icon, label_style = "[yellow]⠿[/yellow]", "yellow"
-            else:
-                icon, label_style = "[cyan]⠿[/cyan]", "default"
-            row = Text()
-            row.append("    ")
-            row.append(Text.from_markup(icon))
-            row.append("  ")
-            row.append(a["label"], style=label_style)
-            tbl.add_row(row)
+            label_style = "dim" if s == "done" else "red dim" if s == "error" else "default"
+            tbl.add_row(Text(f"    {a['label']}", style=label_style))
 
     return tbl
 
@@ -242,25 +245,22 @@ def _build_response_panel(
     elapsed: float,
     interrupted: bool = False,
 ) -> Panel:
-    """Build a Panel for the final agent response."""
+    """Panel wrapping the final agent response."""
     color = AGENT_COLORS.get(agent.name, "white")
     title_text = Text()
-    title_text.append(f"{agent.emoji} ", style=f"bold {color}")
+    title_text.append("  ", style="dim")
     title_text.append(agent.display_name, style=f"bold {color}")
 
-    sub_parts = [f"{elapsed:.1f}s"]
-    if interrupted:
-        sub_parts.append("interrupted")
-    subtitle = "  ".join(sub_parts)
+    sub = f"{elapsed:.1f}s" if not interrupted else f"{elapsed:.1f}s  interrupted"
 
     return Panel(
-        Padding(Markdown(content), pad=(0, 1, 0, 1)),
+        Padding(Markdown(_strip_hr(content)), pad=(0, 1, 0, 1)),
         title=title_text,
         title_align="left",
-        subtitle=f"[dim]{subtitle}[/dim]",
+        subtitle=f"[dim]{sub}[/dim]",
         subtitle_align="right",
         border_style=f"dim {color}",
-        box=box.ROUNDED,
+        box=box.SIMPLE,
         padding=(0, 1),
     )
 
@@ -279,17 +279,16 @@ def _build_status_line(agent, ctx) -> Text:
 
         filled = min(10, max(0, int(pct / 10)))
         bar_color = "green" if pct < 50 else "yellow" if pct < 80 else "red"
-        bar = f"{'█' * filled}{'░' * (10 - filled)}"
+        bar = f"{'━' * filled}{'╌' * (10 - filled)}"
         ctx_str = f"{est // 1000}k/{max_ctx // 1000}k" if est > 1000 else f"{est}/{max_ctx}"
 
-        line.append(bar, style=bar_color)
-        line.append(f" {pct}% {ctx_str}", style="dim")
+        line.append(bar, style=f"bold {bar_color}")
+        line.append(f"  {pct}%  {ctx_str}", style="dim")
         line.append("  ·  ", style="dim")
         line.append(f"{msgs} msgs", style="dim")
         line.append("  ·  ", style="dim")
         line.append(f"${cost:.4f}", style="dim green" if cost < 0.01 else "dim yellow")
         line.append("  ·  ", style="dim")
-        # Truncate long model names
         model_short = model if len(model) <= 30 else model[:27] + "…"
         line.append(model_short, style="dim")
     except Exception:
@@ -309,14 +308,16 @@ async def _chat_single(agent_name: str, message: str) -> None:
     await _init_agent_lazy(agent, ctx)
     try:
         t0 = time.monotonic()
+        spinner_style = AGENT_SPINNERS.get(agent.name, "dots")
+        ict = icon_text(agent.name)
         status_handle = console.status(
-            f"[dim]{agent.emoji} {agent.display_name} thinking...[/dim]",
-            spinner="dots",
+            f"[dim]{ict} {agent.display_name} thinking...[/dim]",
+            spinner=spinner_style,
         )
         status_handle.start()
 
         def _on_status(msg: str) -> None:
-            status_handle.update(f"[dim]{agent.emoji} {msg}[/dim]")
+            status_handle.update(f"[dim]{ict} {msg}[/dim]")
 
         try:
             resp = await agent.chat(message, on_status=_on_status)
@@ -342,6 +343,7 @@ def _build_input_display(
     agent,
     ctx,
     buffer: str,
+    cursor_pos: int,
     popup_visible: bool,
     selected_idx: int,
     filtered_commands: list[tuple[str, str]],
@@ -350,37 +352,46 @@ def _build_input_display(
     color = AGENT_COLORS.get(agent.name, "cyan")
     results: list = []
     w = console.width
+    rule = "━" * max(0, w - 4)
 
-    # ── Status bar ─────────────────────────────────────────────────────────
-    status_text = _build_status_line(agent, ctx)
-    status_bar = Text()
-    status_bar.append("  ")
-    status_bar.append(status_text)
-    results.append(status_bar)
+    # ── Top solid line (agent color) ─────────────────────────────────────────
+    results.append(Text(f"  {rule}", style=f"bold {color}"))
 
-    # Thin separator
-    results.append(Text("  " + "─" * max(0, w - 4), style="dim"))
-
-    # ── Prompt line ────────────────────────────────────────────────────────
+    # ── Prompt line ──────────────────────────────────────────────────────────
     prompt = Text()
     prompt.append("  ")
-    prompt.append(f"{agent.emoji} ", style=f"bold {color}")
     prompt.append(agent.display_name, style=f"bold {color}")
     prompt.append(" ❯ ", style=f"{color}")
     if buffer:
+        pre = buffer[:cursor_pos]
+        post = buffer[cursor_pos:]
         if buffer.startswith("/"):
-            space_idx = buffer.find(" ")
+            space_idx = pre.find(" ")
             if space_idx > 0:
-                prompt.append(buffer[:space_idx], style="bold cyan")
-                prompt.append(buffer[space_idx:])
+                prompt.append(pre[:space_idx], style="bold cyan")
+                prompt.append(pre[space_idx:])
+                prompt.append("▌", style=f"bold {color}")
+                prompt.append(post)
+            elif space_idx < 0 and post:
+                # /command followed by args — pre is the cmd, post is args
+                prompt.append(pre, style="bold cyan")
+                prompt.append("▌", style=f"bold {color}")
+                prompt.append(post)
             else:
-                prompt.append(buffer, style="bold cyan")
+                prompt.append(pre, style="bold cyan")
+                prompt.append("▌", style=f"bold {color}")
+                if post:
+                    prompt.append(post)
         else:
-            prompt.append(buffer)
-    prompt.append("▌", style=f"bold {color}")  # blinking-style cursor
+            prompt.append(pre)
+            prompt.append("▌", style=f"bold {color}")
+            if post:
+                prompt.append(post)
+    else:
+        prompt.append("▌", style=f"bold {color}")
     results.append(prompt)
 
-    # ── Hint line ──────────────────────────────────────────────────────────
+    # ── Hint line ────────────────────────────────────────────────────────────
     if popup_visible:
         hint = "↑↓ select  tab complete  esc dismiss  enter confirm"
     else:
@@ -390,7 +401,17 @@ def _build_input_display(
     hint_line.append(hint, style="dim")
     results.append(hint_line)
 
-    # ── Command popup ──────────────────────────────────────────────────────
+    # ── Bottom solid line (subtle) ───────────────────────────────────────────
+    results.append(Text(f"  {rule}", style="dim"))
+
+    # ── Status bar ───────────────────────────────────────────────────────────
+    status_text = _build_status_line(agent, ctx)
+    status_bar = Text()
+    status_bar.append("  ")
+    status_bar.append(status_text)
+    results.append(status_bar)
+
+    # ── Command popup ────────────────────────────────────────────────────────
     if popup_visible and filtered_commands:
         tbl = Table(show_header=False, box=None, padding=(0, 1), expand=False)
         tbl.add_column(width=28)
@@ -438,12 +459,12 @@ def _read_line_with_popup(agent, ctx) -> str:
     if not sys.stdin.isatty():
         color = AGENT_COLORS.get(agent.name, "cyan")
         prompt = Text()
-        prompt.append(f"  {agent.emoji} ", style=f"bold {color}")
         prompt.append(agent.display_name, style=f"bold {color}")
         prompt.append(" ❯ ", style=color)
         return console.input(prompt)
 
     buffer: list[str] = []
+    cursor_pos = 0
     popup_visible = False
     selected_idx = 0
 
@@ -463,7 +484,7 @@ def _read_line_with_popup(agent, ctx) -> str:
             tbl = Table(show_header=False, box=None, padding=0, expand=True)
             tbl.add_column(ratio=1)
             for item in _build_input_display(
-                agent, ctx, text, popup_visible, selected_idx, filtered
+                agent, ctx, text, cursor_pos, popup_visible, selected_idx, filtered
             ):
                 tbl.add_row(item)
             live.update(tbl)
@@ -486,17 +507,34 @@ def _read_line_with_popup(agent, ctx) -> str:
                 if popup_visible:
                     popup_visible = False
                     buffer.clear()
+                    cursor_pos = 0
                     selected_idx = 0
                 else:
                     buffer.clear()
+                    cursor_pos = 0
                 continue
 
             if key == "backspace":
-                if buffer:
-                    buffer.pop()
+                if buffer and cursor_pos > 0:
+                    del buffer[cursor_pos - 1]
+                    cursor_pos -= 1
                     if not buffer:
                         popup_visible = False
                         selected_idx = 0
+                continue
+
+            if key == "left":
+                if popup_visible:
+                    popup_visible = False
+                if cursor_pos > 0:
+                    cursor_pos -= 1
+                continue
+
+            if key == "right":
+                if popup_visible:
+                    popup_visible = False
+                if cursor_pos < len(buffer):
+                    cursor_pos += 1
                 continue
 
             if popup_visible and filtered:
@@ -508,19 +546,23 @@ def _read_line_with_popup(agent, ctx) -> str:
                     buffer[:] = list(filtered[selected_idx][0])
                     if not filtered[selected_idx][0].endswith(" "):
                         buffer.append(" ")
+                    cursor_pos = len(buffer)
                     popup_visible = False
                 elif isinstance(key, str) and len(key) == 1 and key.isprintable():
-                    buffer.append(key)
+                    buffer.insert(cursor_pos, key)
+                    cursor_pos += 1
                     selected_idx = 0
                 continue
 
             if isinstance(key, str) and len(key) == 1:
                 if key == "/" and not buffer:
-                    buffer.append(key)
+                    buffer.insert(cursor_pos, key)
+                    cursor_pos += 1
                     popup_visible = True
                     selected_idx = 0
                 elif key.isprintable():
-                    buffer.append(key)
+                    buffer.insert(cursor_pos, key)
+                    cursor_pos += 1
                     if buffer == ["/"]:
                         popup_visible = True
                         selected_idx = 0
@@ -530,7 +572,6 @@ def _read_line_with_popup(agent, ctx) -> str:
     if result:
         color = AGENT_COLORS.get(agent.name, "cyan")
         echo = Text()
-        echo.append(f"  {agent.emoji} ", style=f"bold {color}")
         echo.append(agent.display_name, style=f"bold {color}")
         echo.append(" ❯ ", style=color)
         echo.append(result, style="white")
@@ -568,7 +609,7 @@ async def _interactive(agent_name: str | None = None) -> None:
             if cmd_lower in ("/quit", "/exit", "/q"):
                 break
             if cmd_lower in ("/help", "/?"):
-                _print_help()
+                _print_help(ctx)
                 continue
             if cmd_lower == "/clear":
                 console.clear()
@@ -592,7 +633,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                     removed = sum(1 for m in ag.memory.short_term if m.role != "system")
                     await ag.memory.clear_short_term()
                     console.print(
-                        f"  [green]cleared {ag.emoji} {ag.display_name} "
+                        f"  [green]cleared {icon_text(ag.name)} {ag.display_name} "
                         f"({removed} messages)[/green]"
                     )
                 continue
@@ -664,13 +705,12 @@ async def _interactive(agent_name: str | None = None) -> None:
                 color = AGENT_COLORS.get(new_name, "white")
                 switch_msg = Text()
                 switch_msg.append("  ")
-                switch_msg.append(f"{agent.emoji} ", style=f"bold {color}")
                 switch_msg.append(agent.display_name, style=f"bold {color}")
                 switch_msg.append("  ready", style="dim")
                 console.print(switch_msg)
                 continue
             if cmd_lower.startswith("/") and cmd.strip() != "/":
-                _print_help()
+                _print_help(ctx)
                 continue
 
             # --- Streaming chat with tool-call support ---
@@ -746,57 +786,101 @@ async def _interactive(agent_name: str | None = None) -> None:
 # -- Welcome & Help --------------------------------------------------------
 
 
+def _build_welcome_art() -> Text:
+    """Build the ASCII-art welcome banner."""
+    t = Text()
+    t.append("        ·  ✦  ·       · ✦  ·  ✦       ✦  ·  ✦  ·\n", style="dim bright_white")
+    t.append("     ✦        ✦    ✦         ✦    ·         ✦    \n", style="dim bright_white")
+    t.append("   ", style="")
+    t.append("≈", style="cyan bold")
+    t.append("  W E A T H E R   A G E N T S  ", style="bold white")
+    t.append("≈", style="cyan bold")
+    t.append("\n")
+    t.append("     ·        ·    ·         ·    ✦         ·    \n", style="dim bright_white")
+    t.append("        ✦  ·  ✦       ✦ ·  ✦  ·       ·  ✦  ·    \n", style="dim bright_white")
+    return t
+
+
 def _print_welcome(model: str, workspace_path: str = "") -> None:
     console.print()
 
-    # ── Header panel ───────────────────────────────────────────────────────
-    agents_info = [
-        ("\U0001f32b", "Fog", "research", AGENT_COLORS["fog"]),
-        ("\U0001f327", "Rain", "codegen", AGENT_COLORS["rain"]),
-        ("❄", "Frost", "review", AGENT_COLORS["frost"]),
-        ("\U0001f328", "Snow", "planning", AGENT_COLORS["snow"]),
-        ("\U0001f4a7", "Dew", "devops", AGENT_COLORS["dew"]),
-    ]
+    agent_names = ["fog", "rain", "frost", "snow", "dew"]
+    art = _build_welcome_art()
 
-    # Agent roster table inside welcome panel
-    roster = Table(show_header=False, box=None, padding=(0, 2, 0, 0), expand=False)
-    roster.add_column(width=4)  # emoji
-    roster.add_column(width=8)  # name
-    roster.add_column(style="dim", width=12)  # role
+    # ── Agent row ──────────────────────────────────────────────────────
+    agent_tbl = Table(show_header=False, box=None, padding=(0, 3), expand=True)
+    for _ in range(5):
+        agent_tbl.add_column(ratio=1, justify="center")
 
-    for emoji, name, role, color in agents_info:
-        roster.add_row(
-            Text(emoji),
-            Text(name, style=f"bold {color}"),
-            Text(role),
-        )
+    agent_rows: list[list[Text]] = [[], [], []]
+    for idx, name in enumerate(agent_names):
+        color = AGENT_COLORS.get(name, "white")
+        active = idx == 0
+        display = {"fog": "Fog", "rain": "Rain", "frost": "Frost", "snow": "Snow", "dew": "Dew"}[
+            name
+        ]
+        role = {
+            "fog": "research",
+            "rain": "codegen",
+            "frost": "review",
+            "snow": "planning",
+            "dew": "devops",
+        }[name]
+        s = "●" if active else "○"
+        s_style = f"bold {color}" if active else "dim"
 
-    meta = Text()
-    meta.append("\nmodel  ", style="dim")
-    meta.append(model, style="cyan")
+        line1 = Text(justify="center")
+        line1.append(display, style=f"bold {color}")
+
+        line2 = Text(justify="center")
+        line2.append(role, style="dim italic")
+
+        line3 = Text(justify="center")
+        line3.append(f"{s} ", style=s_style)
+        line3.append("active" if active else "standby", style=s_style)
+
+        agent_rows[0].append(line1)
+        agent_rows[1].append(line2)
+        agent_rows[2].append(line3)
+
+    for row in agent_rows:
+        agent_tbl.add_row(*row)
+
+    # ── Meta ───────────────────────────────────────────────────────────
+    meta = Text(justify="center")
+    meta.append("model  ", style="dim")
+    meta.append(model, style="cyan bold")
+    meta.append("   ·   ", style="dim")
+    meta.append("workspace  ", style="dim")
     if workspace_path:
-        meta.append("  ·  ws  ", style="dim")
         short_ws = workspace_path if len(workspace_path) <= 40 else "…" + workspace_path[-38:]
-        meta.append(short_ws, style="dim white")
+        meta.append(short_ws, style="white")
+    else:
+        meta.append("(none)", style="dim")
 
-    meta.append("\n\n")
-    meta.append("Type ", style="dim")
-    meta.append("/", style="cyan bold")
-    meta.append(" for commands, ", style="dim")
-    meta.append("/help", style="cyan")
-    meta.append(" for reference", style="dim")
+    tip = Text(justify="center")
+    tip.append("Type  ", style="dim")
+    tip.append("/", style="cyan bold")
+    tip.append("  for commands  ·  ", style="dim")
+    tip.append("/help", style="cyan bold")
+    tip.append("  for reference", style="dim")
 
-    content = Table(show_header=False, box=None, padding=0)
-    content.add_column()
-    content.add_row(roster)
+    # ── Assemble ───────────────────────────────────────────────────────
+    content = Table(show_header=False, box=None, padding=0, expand=True)
+    content.add_column(justify="center")
+
+    content.add_row(art)
+    content.add_row(Text(""))
+    content.add_row(agent_tbl)
+    content.add_row(Text(""))
     content.add_row(meta)
+    content.add_row(Text(""))
+    content.add_row(tip)
 
     console.print(
         Panel(
             content,
-            title="[bold]Weather Agents[/bold]  [dim]v" + __version__ + "[/dim]",
-            title_align="left",
-            border_style="dim",
+            border_style="dim white",
             box=box.ROUNDED,
             padding=(1, 2),
         )
@@ -804,60 +888,71 @@ def _print_welcome(model: str, workspace_path: str = "") -> None:
     console.print()
 
 
-def _print_help() -> None:
+def _print_help(ctx) -> None:
+    en = getattr(ctx.config.llm, "language", "zh") == "en"
+
+    def _h(zh: str, en_text: str) -> str:
+        return en_text if en else zh
+
     sections = [
         (
-            "Agents",
+            _h("指令", "Commands"),
             [
-                ("/fog  /rain  /frost  /snow  /dew", "switch active agent"),
-                ("/task <goal>", "multi-agent orchestration"),
+                ("/help", _h("显示帮助", "show this help")),
+                ("/clear", _h("清屏", "clear screen")),
             ],
         ),
         (
-            "Config",
+            _h("Agent 切换", "Agents"),
             [
-                ("/model", "view current model"),
-                ("/model <name>", "set default model for all agents"),
-                ("/model <agent> <name>", "override model per agent"),
-                ("/apikey", "list API keys"),
-                ("/apikey set <prov> <key>", "add / replace key"),
-                ("/apikey del <prov>", "remove key"),
-                ("/workspace", "workspace info"),
-                ("/workspace set <path>", "set custom workspace"),
-                ("/workspace auto", "reset to auto-detect"),
+                ("/fog  /rain  /frost  /snow  /dew", _h("切换当前 Agent", "switch active agent")),
+                ("/task <goal>", _h("多 Agent 编排", "multi-agent orchestration")),
             ],
         ),
         (
-            "Skills",
+            _h("设置", "Config"),
             [
-                ("/skills", "list available skills"),
-                ("/use <skill>", "activate a skill"),
-                ("/deactivate", "deactivate all skills"),
+                ("/model", _h("查看模型", "view current model")),
+                ("/model <name>", _h("设置全局模型", "set default model")),
+                ("/model <agent> <name>", _h("设置 Agent 模型", "override per-agent model")),
+                ("/apikey", _h("查看密钥", "list API keys")),
+                ("/apikey set <prov> <key>", _h("添加密钥", "add / replace key")),
+                ("/apikey del <prov>", _h("删除密钥", "remove key")),
+                ("/workspace", _h("工作空间信息", "workspace info")),
+                ("/workspace set <path>", _h("设置工作空间", "set custom workspace")),
+                ("/workspace auto", _h("自动检测工作空间", "reset to auto-detect")),
             ],
         ),
         (
-            "Info",
+            _h("技能", "Skills"),
             [
-                ("/status", "agent overview table"),
-                ("/cost", "token usage & cost breakdown"),
-                ("/cost reset", "reset usage counters"),
-                ("/compact", "compress context window"),
-                ("/history", "event log"),
-                ("/mcp", "MCP server status"),
-                ("/memory", "memory layer stats"),
-                ("/memory clear", "clear short-term memory"),
-                ("/version", "version info"),
+                ("/skills", _h("列出技能", "list available skills")),
+                ("/use <skill>", _h("激活技能", "activate a skill")),
+                ("/deactivate", _h("停用所有技能", "deactivate all skills")),
             ],
         ),
         (
-            "Session",
+            _h("信息", "Info"),
             [
-                ("/sessions", "list saved sessions"),
-                ("/session new [name]", "start a new session"),
-                ("/session load <id>", "switch to session"),
-                ("/session delete <id>", "delete session"),
-                ("/clear", "clear screen & redraw"),
-                ("/quit", "exit"),
+                ("/status", _h("Agent 概览", "agent overview")),
+                ("/cost", _h("用量与费用", "usage & cost")),
+                ("/cost reset", _h("重置计数", "reset counters")),
+                ("/compact", _h("压缩上下文", "compress context")),
+                ("/history", _h("事件日志", "event log")),
+                ("/mcp", _h("MCP 服务器状态", "MCP status")),
+                ("/memory", _h("记忆层状态", "memory stats")),
+                ("/memory clear", _h("清除短期记忆", "clear short-term memory")),
+                ("/version", _h("版本信息", "version info")),
+            ],
+        ),
+        (
+            _h("会话", "Session"),
+            [
+                ("/sessions", _h("列出会话", "list saved sessions")),
+                ("/session new [name]", _h("新建会话", "start new session")),
+                ("/session load <id>", _h("加载会话", "switch to session")),
+                ("/session delete <id>", _h("删除会话", "delete session")),
+                ("/quit", _h("退出", "exit")),
             ],
         ),
     ]
@@ -903,7 +998,6 @@ def _print_status(agents: dict) -> None:
         state_color = "green" if s["state"] == "idle" else "yellow"
         tokens = f"{s['usage']['prompt_tokens']:,}  /  {s['usage']['completion_tokens']:,}"
         agent_cell = Text()
-        agent_cell.append(f"{s['emoji']} ", style=f"bold {color}")
         agent_cell.append(s["display_name"], style=f"bold {color}")
 
         tbl.add_row(
@@ -1084,7 +1178,6 @@ async def _print_memory_status(ctx) -> None:
         long_term = await ag.memory.recall(limit=100)
 
         agent_cell = Text()
-        agent_cell.append(f"{ag.emoji} ", style=f"bold {color}")
         agent_cell.append(ag.display_name, style=f"bold {color}")
 
         tbl.add_row(
@@ -1185,7 +1278,7 @@ def _print_skills(agent) -> None:
     console.print()
     console.print(
         Rule(
-            f"  {agent.emoji} {agent.display_name} Skills  ",
+            f"  {icon_text(agent.name)} {agent.display_name} Skills  ",
             align="left",
             style="dim",
         )
@@ -1375,7 +1468,7 @@ def _handle_model_command(cmd: str, ctx) -> None:
             agent_cfg = getattr(ctx.config.agents, name, None)
             m = agent_cfg.model if agent_cfg and agent_cfg.model else current
             marker = "" if agent_cfg and agent_cfg.model else " [dim](default)[/dim]"
-            console.print(f"  {AGENT_EMOJI[name]} {name:<6}  {m}{marker}")
+            console.print(f"  {icon_text(name)} {name:<6}  {m}{marker}")
         console.print(
             "\n  [dim]/model <name>           set default model\n"
             "  /model <agent> <name>    set agent model\n"
@@ -1398,14 +1491,12 @@ def _handle_model_command(cmd: str, ctx) -> None:
             delete_config(f"model.{agent_name}")
             agent_cfg = getattr(ctx.config.agents, agent_name)
             agent_cfg.model = ""
-            console.print(f"  [green]{AGENT_EMOJI[agent_name]} {agent_name} -> default[/green]")
+            console.print(f"  [green]{icon_text(agent_name)} {agent_name} -> default[/green]")
         else:
             set_config(f"model.{agent_name}", model_name)
             agent_cfg = getattr(ctx.config.agents, agent_name)
             agent_cfg.model = model_name
-            console.print(
-                f"  [green]{AGENT_EMOJI[agent_name]} {agent_name} -> {model_name}[/green]"
-            )
+            console.print(f"  [green]{icon_text(agent_name)} {agent_name} -> {model_name}[/green]")
         return
 
     model_name = arg
@@ -1485,16 +1576,15 @@ async def _run_task(goal: str, agents=None) -> None:
         await own_ctx.init_all()
         agents = own_ctx.agent_map
 
-    emoji_map = AGENT_EMOJI
-
     try:
         from weather_agents.core.factory import orchestrate_task
 
         status_handles: dict[str, Any] = {}
 
         async def _on_start(t):
-            emoji = emoji_map.get(t.assigned_to or "", "?")
-            sh = console.status(f"[dim]{emoji} {t.description}...[/dim]", spinner="dots")
+            ict = icon_text(t.assigned_to or "")
+            sp = AGENT_SPINNERS.get(t.assigned_to or "", "dots")
+            sh = console.status(f"[dim]{ict} {t.description}...[/dim]", spinner=sp)
             sh.start()
             status_handles[t.id] = sh
 
@@ -1502,9 +1592,9 @@ async def _run_task(goal: str, agents=None) -> None:
             sh = status_handles.pop(t.id, None)
             if sh:
                 sh.stop()
-            emoji = emoji_map.get(r.agent, "?")
+            ict = icon_text(r.agent)
             icon = "[green]✓[/green]" if r.success else "[red]✗[/red]"
-            console.print(f"  {icon} {emoji} {r.description}")
+            console.print(f"  {icon} {ict} {r.description}")
 
         console.print()
         console.print(Rule("  Task  ", align="left", style="dim"))
@@ -1533,9 +1623,8 @@ async def _run_task(goal: str, agents=None) -> None:
         plan_tbl.add_column(width=12, style="dim")  # dep
 
         for t in tasks:
-            emoji = emoji_map.get(t.assigned_to or "", "?")
             dep = f"← {t.parent_id}" if t.parent_id else ""
-            plan_tbl.add_row(f"{t.id}.", emoji, t.description, dep)
+            plan_tbl.add_row(f"{t.id}.", t.assigned_to or "", t.description, dep)
         console.print(plan_tbl)
 
         # Results
@@ -1550,7 +1639,7 @@ async def _run_task(goal: str, agents=None) -> None:
         if summary:
             console.print()
             console.print(Rule("  Summary  ", align="left", style="dim"))
-            console.print(Padding(Markdown(summary), pad=(0, 2, 0, 2)))
+            console.print(Padding(Markdown(_strip_hr(summary)), pad=(0, 2, 0, 2)))
 
     finally:
         # Clean up any lingering status handles
@@ -1621,7 +1710,6 @@ def status() -> None:
         model = getattr(ctx.config.agents, name).model or ctx.config.llm.default_model
         skills = ", ".join(cls.skill_names) if cls.skill_names else "—"
         agent_cell = Text()
-        agent_cell.append(f"{AGENT_EMOJI[name]} ", style=f"bold {color}")
         agent_cell.append(cls.display_name, style=f"bold {color}")
         tbl.add_row(agent_cell, cls.specialty, Text(model, style="cyan"), skills)
     console.print(tbl)
@@ -1662,7 +1750,6 @@ def config(
             m = attr.model or ""
             model_cell = Text(m, style="cyan") if m else Text("(default)", style="dim")
             agent_cell = Text()
-            agent_cell.append(f"{AGENT_EMOJI[name]} ", style=f"bold {color}")
             agent_cell.append(name, style=f"bold {color}")
             agent_tbl.add_row(agent_cell, model_cell)
         console.print(agent_tbl)
@@ -1734,7 +1821,7 @@ def memory(
                     removed = sum(1 for m in agent.memory.short_term if m.role != "system")
                     await agent.memory.clear_short_term()
                     console.print(
-                        f"  [green]cleared {agent.emoji} {agent.display_name} "
+                        f"  [green]cleared {icon_text(agent.name)} {agent.display_name} "
                         f"({removed} messages)[/green]"
                     )
             else:
@@ -1743,7 +1830,7 @@ def memory(
                     working = len(agent.memory.working)
                     long_term = await agent.memory.recall(limit=100)
                     console.print(
-                        f"  {agent.emoji} {agent.display_name}  "
+                        f"  {icon_text(agent.name)} {agent.display_name}  "
                         f"[dim]{short} short / {working} working / "
                         f"{len(long_term)} long-term[/dim]"
                     )
@@ -1896,16 +1983,14 @@ def _run_setup_wizard() -> None:
         console.print()
         default_idx = next((i + 1 for i, (p, _) in enumerate(flat) if p == "deepseek"), 1)
         for agent_name, cls in AGENT_CLASSES.items():
-            label = f"{AGENT_EMOJI[agent_name]} {cls.display_name} model #"
+            label = f"{icon_text(agent_name)} {cls.display_name} model #"
             picked = _pick_from_catalog(flat, label, default_idx=default_idx)
             if not picked:
                 continue
             prov, model_name = picked
             set_config(f"model.{agent_name}", model_name)
             providers_needed.add(prov)
-            console.print(
-                f"  [green]✓ {AGENT_EMOJI[agent_name]} {agent_name} → {model_name}[/green]"
-            )
+            console.print(f"  [green]✓ {icon_text(agent_name)} {agent_name} → {model_name}[/green]")
 
     # Step 3: collect API keys
     console.print()

@@ -6,7 +6,7 @@ from weather_agents.core.agent import BaseAgent
 class DewAgent(BaseAgent):
     name = "dew"
     display_name = "露"
-    emoji = "💧"
+    emoji = ","
     specialty = "运维集成"
     tool_names = [
         "read_file",
@@ -25,7 +25,7 @@ class DewAgent(BaseAgent):
         "http_get",
         "http_post",
     ]
-    skill_names = ["sys_operator", "ci_cd_manager", "api_integrator"]
+    skill_names = ["sys_operator", "ci_cd_manager", "api_integrator", "self_evolve"]
 
     system_prompt = """你是 Weather Agents 的「露」— 润物无声，守护系统运行。
 

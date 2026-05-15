@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <linearGradient id="dg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#86efac"/>
+      <stop offset="100%" stop-color="#22c55e"/>
+    </linearGradient>
+    <radialGradient id="hl" cx="0.35" cy="0.3" r="0.5">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Droplet shape -->
+  <path d="M24 4 Q32 20 36 28 Q38 34 34 38 Q30 42 24 42 Q18 42 14 38 Q10 34 12 28 Q16 20 24 4Z" fill="url(#dg)"/>
+  <!-- Highlight -->
+  <ellipse cx="20" cy="22" rx="6" ry="8" fill="url(#hl)"/>
+  <!-- Bottom shine -->
+  <ellipse cx="22" cy="34" rx="4" ry="2" fill="#ffffff" opacity="0.15"/>
+</svg>

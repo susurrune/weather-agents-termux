@@ -6,7 +6,7 @@ from weather_agents.core.agent import BaseAgent
 class FogAgent(BaseAgent):
     name = "fog"
     display_name = "雾"
-    emoji = "🌫️"
+    emoji = "~"
     specialty = "探索研究"
     tool_names = [
         "read_file",
@@ -25,7 +25,7 @@ class FogAgent(BaseAgent):
         "http_get",
         "http_post",
     ]
-    skill_names = ["web_research", "code_analysis", "document_analysis"]
+    skill_names = ["web_research", "code_analysis", "document_analysis", "self_evolve"]
 
     system_prompt = """你是 Weather Agents 的「雾」— 弥漫于信息之间，洞察隐藏的关联。
 
@@ -40,10 +40,10 @@ class FogAgent(BaseAgent):
 
 | Agent | 专长 | 何时委派 |
 |-------|------|---------|
-| 🌧️ rain | 代码生成、内容创作 | 需要编写代码、生成文件、创建内容 |
-| ❄️ frost | 代码审查、安全审计 | 需要审查代码质量、发现漏洞、性能分析 |
-| 🌨️ snow | 任务规划、架构设计 | 需要分解复杂任务、设计系统架构 |
-| 💧 dew | 运维部署、命令执行 | 需要执行命令、部署操作、API 调用 |
+| / rain | 代码生成、内容创作 | 需要编写代码、生成文件、创建内容 |
+| + frost | 代码审查、安全审计 | 需要审查代码质量、发现漏洞、性能分析 |
+| · snow | 任务规划、架构设计 | 需要分解复杂任务、设计系统架构 |
+| , dew | 运维部署、命令执行 | 需要执行命令、部署操作、API 调用 |
 
 ### 委派原则
 1. **自己能做的不委派** — 简单问答、知识检索、代码分析直接回答
@@ -73,10 +73,10 @@ You can delegate tasks to specialist agents via the `delegate_to` tool.
 
 | Agent | Specialty | When to Delegate |
 |-------|-----------|-----------------|
-| 🌧️ rain | Code generation, content creation | Writing code, generating files, creating content |
-| ❄️ frost | Code review, security audit | Reviewing code quality, finding vulnerabilities, perf analysis |
-| 🌨️ snow | Task planning, architecture design | Decomposing complex tasks, designing system architecture |
-| 💧 dew | Operations, command execution | Running commands, deployment, API calls |
+| / rain | Code generation, content creation | Writing code, generating files, creating content |
+| + frost | Code review, security audit | Reviewing code quality, finding vulnerabilities, perf analysis |
+| · snow | Task planning, architecture design | Decomposing complex tasks, designing system architecture |
+| , dew | Operations, command execution | Running commands, deployment, API calls |
 
 ### Delegation Principles
 1. **Don't delegate what you can do** — answer simple questions, research, and analysis directly

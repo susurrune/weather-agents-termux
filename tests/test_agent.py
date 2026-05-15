@@ -95,7 +95,7 @@ class TestBaseAgent:
             assert cls.specialty, f"{cls.__name__} missing specialty"
             assert cls.system_prompt, f"{cls.__name__} missing system_prompt"
             assert cls.skill_names, f"{cls.__name__} missing skill_names"
-            assert len(cls.skill_names) == 3, f"{cls.__name__} should have 3 skills"
+            assert len(cls.skill_names) >= 3, f"{cls.__name__} should have at least 3 skills"
 
 
 class TestSkillSystem:
@@ -500,3 +500,126 @@ class TestParseToolArgs:
         from weather_agents.core.agent import _parse_tool_args
 
         assert _parse_tool_args("not even close") is None
+
+
+class TestParseToolArgsExtended:
+    def test_markdown_code_fence(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('```json\n{"query": "news"}\n```')
+        assert result == {"query": "news"}
+
+    def test_markdown_fence_inline(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('```{"query": "news"}```')
+        assert result == {"query": "news"}
+
+    def test_python_none(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"query": None}')
+        assert result == {"query": None}
+
+    def test_python_bool(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        assert _parse_tool_args('{"active": True, "done": False}') == {
+            "active": True,
+            "done": False,
+        }
+
+    def test_backtick_quotes(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("{`query`: `weather`}")
+        assert result == {"query": "weather"}
+
+    def test_unquoted_string_value(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("{query: hello world}")
+        assert result == {"query": "hello world"}
+
+    def test_key_equals_value_format(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('query="news", num_results=5')
+        assert result == {"query": "news", "num_results": 5}
+
+    def test_key_equals_value_single_quotes(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("query='hello world'")
+        assert result == {"query": "hello world"}
+
+    def test_trailing_text_after_object(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"query": "news"} some trailing text')
+        assert result == {"query": "news"}
+
+    def text_before_json(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('Here is the result: {"query": "news"}')
+        assert result == {"query": "news"}
+
+    def test_missing_closing_brace(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"query": "news"')
+        assert result == {"query": "news"}
+
+    def test_extra_closing_brace(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"query": "news"}}')
+        assert result == {"query": "news"}
+
+    def test_mixed_all_issues(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("```\n{`query`: None, 'count': 5,}\n``` extra")
+        assert result == {"query": None, "count": 5}
+
+    def test_nested_object(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"outer": {"inner": "value"}}')
+        assert result == {"outer": {"inner": "value"}}
+
+    def test_empty_object(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        assert _parse_tool_args("{}") == {}
+
+    def test_null_value(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"key": null}')
+        assert result == {"key": None}
+
+    def test_multiline_json(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        raw = '{\n  "query": "news",\n  "count": 5\n}'
+        assert _parse_tool_args(raw) == {"query": "news", "count": 5}
+
+    def test_path_with_slashes(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"path": "/home/user/file.txt"}')
+        assert result == {"path": "/home/user/file.txt"}
+
+    def test_key_equals_none(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("query=None")
+        assert result == {"query": None}
+
+    def test_unquoted_value_with_special_chars(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("{path: ./src/main.py}")
+        assert result == {"path": "./src/main.py"}

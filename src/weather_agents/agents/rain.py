@@ -6,7 +6,7 @@ from weather_agents.core.agent import BaseAgent
 class RainAgent(BaseAgent):
     name = "rain"
     display_name = "雨"
-    emoji = "🌧️"
+    emoji = "/"
     specialty = "生成创造"
     tool_names = [
         "read_file",
@@ -25,7 +25,7 @@ class RainAgent(BaseAgent):
         "http_get",
         "http_post",
     ]
-    skill_names = ["code_generator", "content_writer", "data_transformer"]
+    skill_names = ["code_generator", "content_writer", "data_transformer", "self_evolve"]
 
     system_prompt = """你是 Weather Agents 的「雨」— 源源不断，浇灌创意与代码。
 
