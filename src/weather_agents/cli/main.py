@@ -545,17 +545,16 @@ INTERACTIVE_MODE: str = "auto"  # "auto" or "plan"
 def _should_auto_continue(text: str) -> bool:
     """Check if the AI response signals more work — auto-continue."""
     last_lines = [ln for ln in text.strip().split("\n") if ln.strip()][-3:]
-    keywords = [
-        "继续",
-        "接下来",
-        "下一个",
-        "挨个",
-        "ongoing",
-        "next",
-        "continue",
-        "remaining",
-    ]
-    return any(any(kw in line for kw in keywords) for line in last_lines)
+    # ASCII keywords need word boundaries to avoid false positives (e.g. "next" in "context")
+    ascii_kw = re.compile(r"\b(?:continue|next|remaining|ongoing)\b", re.IGNORECASE)
+    # CJK keywords: substring matching is fine at character granularity
+    cjk_kws = ["继续", "接下来", "下一个", "挨个"]
+    for line in last_lines:
+        if ascii_kw.search(line):
+            return True
+        if any(kw in line for kw in cjk_kws):
+            return True
+    return False
 
 
 # -- Chat -------------------------------------------------------------------
@@ -968,7 +967,7 @@ async def _interactive(agent_name: str | None = None) -> None:
             if cmd_lower == "/sessions":
                 await _print_sessions(agent)
                 continue
-            if cmd_lower.startswith("/session "):
+            if cmd_lower.startswith("/session"):
                 await _handle_session_command(cmd, agent)
                 continue
             if cmd_lower.startswith("/task "):
@@ -1058,6 +1057,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 key = _get_key()
                 if key != "enter":
                     console.print("  [dim]cancelled[/dim]")
+                    agent._pop_last_user_message()
                     continue
 
             # --- Streaming chat with tool-call support ---
@@ -1070,6 +1070,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 status_text = "Thinking..."
                 activities: list[dict] = []
                 _empty_retried = False
+                _auto_continue_count = 0
 
                 live = Live(
                     _build_stream_display(agent, "", ""),
@@ -1124,6 +1125,10 @@ async def _interactive(agent_name: str | None = None) -> None:
                         _empty_retried = True
                         console.print("  [dim yellow]empty response, retrying...[/dim yellow]")
                         await asyncio.sleep(0.5)
+                        # Clean up the user msg + empty assistant from the failed attempt
+                        agent._pop_last_user_message()
+                        if agent.memory.short_term and agent.memory.short_term[-1].role == "assistant" and not agent.memory.short_term[-1].content:
+                            agent.memory.short_term.pop()
                         continue
                     else:
                         console.print("  [dim yellow]model returned empty response[/dim yellow]")
@@ -1134,9 +1139,11 @@ async def _interactive(agent_name: str | None = None) -> None:
                     INTERACTIVE_MODE == "auto"
                     and not interrupted
                     and _should_auto_continue(md_content)
+                    and _auto_continue_count < 3
                 ):
+                    _auto_continue_count += 1
                     inp = "请继续完成"
-                    console.print("  [dim]⋯ auto-continue[/dim]")
+                    console.print("  [dim]⋯ auto-continue ({}/3)[/dim]".format(_auto_continue_count))
                     continue  # Restart streaming
 
                 # — Choice menu: detect numbered options and show interactive popup —

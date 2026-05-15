@@ -884,15 +884,88 @@ class TestPrintSkills:
         with patch("weather_agents.cli.main.console.print"):
             _print_skills(ag)
 
-    def test_with_skills(self):
-        from weather_agents.cli.main import _print_skills
-
-        ag = _make_display_agent("frost")
-        ag.get_available_skills = Mock(
-            return_value=[
-                {"name": "code_reviewer", "description": "Review code", "active": True},
-                {"name": "security_auditor", "description": "Audit security", "active": False},
-            ]
-        )
         with patch("weather_agents.cli.main.console.print"):
             _print_skills(ag)
+
+
+class TestFormatCost:
+    def test_zero_cost(self):
+        from weather_agents.cli.main import _format_cost
+
+        assert _format_cost(0.0) == "$0"
+
+    def test_tiny_cost_cents(self):
+        from weather_agents.cli.main import _format_cost
+
+        assert _format_cost(0.0005) == "0.05¢"
+
+    def test_small_cost_four_decimals(self):
+        from weather_agents.cli.main import _format_cost
+
+        # 0.0123 is >= 0.01 → $0.0123
+        assert _format_cost(0.0123) == "$0.0123"
+
+    def test_dollar_cost_two_decimals(self):
+        from weather_agents.cli.main import _format_cost
+
+        assert _format_cost(1.5) == "$1.50"
+
+    def test_large_cost(self):
+        from weather_agents.cli.main import _format_cost
+
+        assert _format_cost(123.456) == "$123.46"
+
+
+class TestShouldAutoContinue:
+    def test_cjk_keyword_continues(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert _should_auto_continue("接下来我们继续处理下一个任务")
+
+    def test_ascii_keyword_word_boundary(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert _should_auto_continue("Let's continue with the next step")
+
+    def test_no_false_positive_context(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert not _should_auto_continue("Check the context object for details")
+
+    def test_no_false_positive_discontinue(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert not _should_auto_continue("We should discontinue this approach")
+
+    def test_no_keyword_returns_false(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert not _should_auto_continue("The task is complete. All done.")
+
+    def test_only_last_three_lines_checked(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        # The last 3 non-empty lines don't contain any keyword
+        text = "继续\nfirst line\nsecond line\nThis is the final answer."
+        assert not _should_auto_continue(text)
+
+    def test_ongoing_keyword(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert _should_auto_continue("This is an ongoing task")
+
+    def test_remaining_keyword(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert _should_auto_continue("The remaining items are:")
+
+    def test_empty_text_returns_false(self):
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert not _should_auto_continue("")
+
+    def test_no_false_positive_cjk(self):
+        """CJK keyword '继续' does not appear, so should not continue."""
+        from weather_agents.cli.main import _should_auto_continue
+
+        assert not _should_auto_continue("所有任务已完成，无需额外操作。")

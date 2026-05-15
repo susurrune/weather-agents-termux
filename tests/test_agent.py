@@ -623,3 +623,34 @@ class TestParseToolArgsExtended:
 
         result = _parse_tool_args("{path: ./src/main.py}")
         assert result == {"path": "./src/main.py"}
+
+
+class TestPopLastUserMessage:
+    @pytest.mark.asyncio
+    async def test_pop_removes_last_user_message(self, app_config, mock_llm, bus, tool_registry):
+        from weather_agents.agents.fog import FogAgent
+
+        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
+        await agent.init()
+
+        user_before = sum(1 for m in agent.memory.short_term if m.role == "user")
+        agent.memory.add_message("user", "new-msg-to-pop")
+        agent.memory.add_message("assistant", "reply")
+        agent._pop_last_user_message()
+
+        user_after = sum(1 for m in agent.memory.short_term if m.role == "user")
+        # Should have the same count as before (added one, popped one)
+        assert user_after == user_before
+
+        await agent.close()
+
+    @pytest.mark.asyncio
+    async def test_pop_no_user_does_not_crash(self, app_config, mock_llm, bus, tool_registry):
+        from weather_agents.agents.fog import FogAgent
+
+        agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
+        # Don't init — short_term is empty
+        assert len(agent.memory.short_term) == 0
+        agent._pop_last_user_message()  # should not crash
+        assert len(agent.memory.short_term) == 0
+        await agent.close()
