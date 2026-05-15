@@ -28,7 +28,7 @@ src/weather_agents/
 ├── core/            # 核心：agent, llm, memory, tool, skill, config, bus, logger, factory, workspace
 ├── skills/          # 技能实现 (每个文件一个技能)
 └── tools/           # 工具实现 (builtin, delegate)
-tests/               # pytest 测试 (全部 358+ 测试必须通过)
+tests/               # pytest 测试 (全部 371+ 测试必须通过)
 ```
 
 ### 进化工作流

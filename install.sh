@@ -70,7 +70,8 @@ fi
 
 # ── 安装 / 升级 weather-agents ────────────────────────────────────────────────
 info "安装 weather-agents..."
-"$UV" tool install --reinstall "$REPO"
+# UV_LINK_MODE=copy: Termux/PRoot 文件系统不支持硬链接，需用复制模式
+UV_LINK_MODE=copy "$UV" tool install --reinstall "$REPO"
 ok "weather-agents 安装成功"
 
 # ── 检查已安装的命令 ──────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ WACODE_BIN="$LOCAL_BIN/wacode"
 
 # ── PATH 配置 ─────────────────────────────────────────────────────────────────
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+LINK_LINE='export UV_LINK_MODE=copy  # Termux: 文件系统不支持硬链接'
 
 add_to_rc() {
     local rc="$1"
@@ -86,6 +88,10 @@ add_to_rc() {
         if ! grep -qF '.local/bin' "$rc"; then
             printf '\n# Weather Agents — 工具目录\n%s\n' "$PATH_LINE" >> "$rc"
             ok "已将 \$HOME/.local/bin 添加到 $rc"
+        fi
+        if ! grep -qF 'UV_LINK_MODE' "$rc"; then
+            printf '%s\n' "$LINK_LINE" >> "$rc"
+            ok "已将 UV_LINK_MODE=copy 添加到 $rc"
         fi
     fi
 }

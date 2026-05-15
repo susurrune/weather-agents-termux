@@ -1973,10 +1973,10 @@ async def _run_task(goal: str, agents=None) -> None:
         await own_ctx.init_all()
         agents = own_ctx.agent_map
 
+    status_handles: dict[str, Any] = {}
     try:
         from weather_agents.core.factory import orchestrate_task
 
-        status_handles: dict[str, Any] = {}
 
         async def _on_start(t):
             ict = icon_text(t.assigned_to or "")
@@ -2408,7 +2408,7 @@ def init() -> None:
     if answer in ("", "y", "yes"):
         asyncio.run(_interactive())
     else:
-        console.print("\n  [dim]Run `wacode` when ready.[/dim]\n")
+        console.print("\n  [dim]Run `wa` when ready.[/dim]\n")
 
 
 # -- Version ---------------------------------------------------------------

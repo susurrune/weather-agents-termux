@@ -724,12 +724,15 @@ class BaseAgent:
             for tc in response.tool_calls:
                 tool_name = tc["function"]["name"]
                 raw_args = tc["function"]["arguments"]
+                parse_error = ""
                 if isinstance(raw_args, str):
                     tool_args = _parse_tool_args(raw_args)
                     if tool_args is None:
                         parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {raw_args[:200]}"
                 else:
-                    tool_args = raw_args
+                    tool_args = raw_args if raw_args is not None else None
+                    if tool_args is None:
+                        parse_error = f"Tool '{tool_name}' received null arguments"
 
                 tool = self.tool_registry.get(tool_name)
                 tool_label = (
