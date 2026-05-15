@@ -168,7 +168,7 @@ def _get_key() -> str:
             _termios.tcsetattr(fd, _termios.TCSADRAIN, old)
 
 
-app = typer.Typer(name="wacode", help="Weather Agents CLI", no_args_is_help=True)
+app = typer.Typer(name="wacode", help="Weather Agents CLI", no_args_is_help=False)
 console = Console()
 
 # Per-agent animated spinner themes for streaming / status indicators
@@ -187,8 +187,9 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _global_options(
+    ctx: typer.Context,
     version: bool = typer.Option(  # noqa: B008
         False,
         "--version",
@@ -200,6 +201,8 @@ def _global_options(
 ) -> None:
     """Top-level Typer callback hosting global flags like --version."""
     _ = version  # Consumed by callback above.
+    if ctx.invoked_subcommand is None:
+        chat()
 
 
 def _strip_hr(markup: str) -> str:
