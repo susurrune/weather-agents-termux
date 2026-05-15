@@ -118,6 +118,16 @@ def _format_user_facing_error(model: str, err: BaseException | None) -> str:
     return f"❌  {model} 调用失败：{short}"
 
 
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count for mixed CJK/English text.
+
+    CJK characters ~2 tokens each, non-CJK ~4 chars per token.
+    """
+    cjk = sum(1 for c in text if "一" <= c <= "鿿" or "　" <= c <= "〿")
+    other = len(text) - cjk
+    return max(1, cjk * 2 + other // 4)
+
+
 # Cost per 1K tokens (input / output) — USD
 _MODEL_COST_ESTIMATES: dict[str, tuple[float, float]] = {
     "gpt-4o": (0.0025, 0.01),
@@ -503,7 +513,7 @@ class LLMClient:
             try:
                 prompt_tokens = int(litellm.token_counter(model=model, messages=messages))
             except Exception:
-                prompt_tokens = max(1, len(str(messages)) // 4)
+                prompt_tokens = max(1, _estimate_tokens(str(messages)))
             try:
                 completion_tokens = int(
                     litellm.token_counter(
@@ -512,7 +522,7 @@ class LLMClient:
                     )
                 )
             except Exception:
-                completion_tokens = max(1, len(full_content) // 4)
+                completion_tokens = max(1, _estimate_tokens(full_content))
             self._track_usage(agent_name, model, prompt_tokens, completion_tokens)
             log_event(
                 log,

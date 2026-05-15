@@ -132,6 +132,8 @@ async def _write_file(path: str, content: str, **kwargs) -> str:
 
 async def _edit_file(path: str, old_text: str, new_text: str, count: int = 1, **kwargs) -> str:
     path = os.path.expanduser(path)
+    if _is_protected_path(path):
+        return f"Error: refusing to edit protected path: {path}"
     try:
         with open(path, encoding="utf-8") as f:
             content = f.read()
@@ -223,6 +225,8 @@ def _tree_walk(
 async def _move_file(src: str, dst: str, **kwargs) -> str:
     """Move or rename a file or directory."""
     src, dst = os.path.expanduser(src), os.path.expanduser(dst)
+    if _is_protected_path(src):
+        return f"Error: refusing to move protected path: {src}"
     try:
         import shutil
 
@@ -236,6 +240,8 @@ async def _move_file(src: str, dst: str, **kwargs) -> str:
 async def _copy_file(src: str, dst: str, **kwargs) -> str:
     """Copy a file or directory."""
     src, dst = os.path.expanduser(src), os.path.expanduser(dst)
+    if _is_protected_path(src):
+        return f"Error: refusing to copy protected path: {src}"
     try:
         import shutil
 
@@ -870,6 +876,7 @@ def register_builtin_tools() -> None:
                 ),
             ],
             handler=_edit_file,
+            dangerous=True,
         ),
         Tool(
             name="file_search",
@@ -1037,6 +1044,7 @@ def register_builtin_tools() -> None:
                 ToolParameter(name="dst", type="string", description="Destination path"),
             ],
             handler=_copy_file,
+            dangerous=True,
         ),
         Tool(
             name="delete_file",

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
+import logging
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+
+log = logging.getLogger("wa.bus")
 
 
 class EventType(StrEnum):
@@ -71,8 +73,10 @@ class MessageBus:
         if event.type != EventType.STATE_CHANGE:
             return
         for handler in self._state_listeners:
-            with contextlib.suppress(Exception):
+            try:
                 await handler(event)
+            except Exception as e:
+                log.exception("state_change handler failed: %s", e)
 
     async def publish(self, event: Event) -> None:
         self._history.append(event)
@@ -82,16 +86,20 @@ class MessageBus:
             # Direct message
             handlers = self._subscribers.get(event.target, [])
             for handler in handlers:
-                with contextlib.suppress(Exception):
+                try:
                     await handler(event)
+                except Exception as e:
+                    log.exception("bus handler failed for target=%s: %s", event.target, e)
         else:
             # Broadcast
             for name, handlers in self._subscribers.items():
                 if name == event.source:
                     continue
                 for handler in handlers:
-                    with contextlib.suppress(Exception):
+                    try:
                         await handler(event)
+                    except Exception as e:
+                        log.exception("bus handler failed for subscriber=%s: %s", name, e)
 
     def get_history(
         self,

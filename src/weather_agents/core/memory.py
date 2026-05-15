@@ -118,8 +118,20 @@ class Memory:
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent, updated_at DESC)"
         )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS working_data (
+                agent TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (agent, key)
+            )
+            """
+        )
         await self._db.commit()
         await self._load_short_term()
+        await self._load_working()
 
     async def _load_short_term(self) -> None:
         if not self._db or self._loaded:
@@ -356,10 +368,14 @@ class Memory:
     def get_context_window_usage(self) -> dict:
         """Return stats about current memory usage."""
         total_chars = sum(len(m.content) for m in self.short_term)
+        cjk = sum(
+            1 for m in self.short_term for c in m.content if "一" <= c <= "鿿" or "　" <= c <= "〿"
+        )
+        other = total_chars - cjk
         return {
             "message_count": len(self.short_term),
             "total_chars": total_chars,
-            "estimated_tokens": total_chars // 4,
+            "estimated_tokens": max(1, cjk * 2 + other // 4),
             "limit": self.config.short_term_limit,
         }
 
@@ -373,16 +389,69 @@ class Memory:
             )
             await self._db.commit()
 
-    # -- Working memory (task-scoped) --
+    # -- Working memory (task-scoped, persisted to SQLite) --
+
+    async def _load_working(self) -> None:
+        """Restore working memory from the database on startup."""
+        if not self._db:
+            return
+        cursor = await self._db.execute(
+            "SELECT key, value FROM working_data WHERE agent = ?",
+            (self.agent_name,),
+        )
+        rows = await cursor.fetchall()
+        for key, value in rows:
+            with contextlib.suppress(json.JSONDecodeError):
+                self.working[key] = json.loads(value)
+
+    def _schedule_persist_working(self) -> None:
+        """Fire-and-forget persist of the full working dict to SQLite."""
+        if not self._db:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._persist_working())
+        self._pending_persists.add(task)
+        task.add_done_callback(self._pending_persists.discard)
+
+    async def _persist_working(self) -> None:
+        """Write all working data to the database (UPSERT)."""
+        if not self._db:
+            return
+        try:
+            await self._db.execute(
+                "DELETE FROM working_data WHERE agent = ?",
+                (self.agent_name,),
+            )
+            for key, value in self.working.items():
+                await self._db.execute(
+                    "INSERT INTO working_data (agent, key, value) VALUES (?, ?, ?)",
+                    (self.agent_name, key, json.dumps(value, ensure_ascii=False)),
+                )
+            await self._db.commit()
+        except Exception as e:
+            try:
+                from weather_agents.core.logger import get_logger
+
+                get_logger("memory").warning(
+                    "persist_working_failed",
+                    extra={"agent": self.agent_name, "error": str(e)},
+                )
+            except ImportError:
+                pass
 
     def set_working(self, key: str, value: Any) -> None:
         self.working[key] = value
+        self._schedule_persist_working()
 
     def get_working(self, key: str, default: Any = None) -> Any:
         return self.working.get(key, default)
 
     def clear_working(self) -> None:
         self.working.clear()
+        self._schedule_persist_working()
 
     # -- Long-term memory (persistent key-value with categories) --
 

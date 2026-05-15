@@ -436,6 +436,7 @@ class BaseAgent:
 
                 tool_calls_received: list[dict] = []
                 streaming_reasoning: str | None = None
+                stream_usage: dict | None = None
                 round_content = ""
                 async for event in self.llm.stream_with_tools(
                     messages=messages,
@@ -456,6 +457,7 @@ class BaseAgent:
                             self._pop_last_user_message()
                         return
                     elif event.type == "done":
+                        stream_usage = event.usage
                         streaming_reasoning = event.reasoning_content
 
                 if not tool_calls_received:
@@ -478,6 +480,15 @@ class BaseAgent:
                 )
                 assistant_stored = True
 
+                if stream_usage:
+                    self.bus.add_event(
+                        Event(
+                            type=EventType.LLM_CALL,
+                            source=self.name,
+                            data={"model": "", "usage": stream_usage},
+                        )
+                    )
+
                 for tc in tool_calls_received:
                     tool_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
@@ -487,6 +498,14 @@ class BaseAgent:
                             parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {raw_args[:200]}"
                     else:
                         tool_args = raw_args
+
+                    self.bus.add_event(
+                        Event(
+                            type=EventType.TOOL_CALL,
+                            source=self.name,
+                            data={"tool": tool_name, "args": tool_args or {}},
+                        )
+                    )
 
                     tool_label = (
                         _tool_status_label(tool_name, tool_args)

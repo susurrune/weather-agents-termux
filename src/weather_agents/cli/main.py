@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from typing import Any
 
 import typer
@@ -46,6 +47,7 @@ from weather_agents.core.factory import (
     create_system_context,
 )
 from weather_agents.core.icons import icon_text
+from weather_agents.core.logger import set_request_id
 from weather_agents.core.workspace import (
     detect_best_workspace_root,
     format_bytes,
@@ -548,6 +550,7 @@ def _should_auto_continue(text: str) -> bool:
 
 
 async def _chat_single(agent_name: str, message: str) -> None:
+    set_request_id(uuid.uuid4().hex[:12])
     ctx = create_system_context()
     agent = ctx.agent_map.get(agent_name)
     if not agent:
@@ -853,6 +856,7 @@ def _read_line_with_popup(agent, ctx, mode: str = "auto") -> str:
 
 async def _interactive(agent_name: str | None = None) -> None:
     global INTERACTIVE_MODE
+    set_request_id(uuid.uuid4().hex[:12])
     ctx = create_system_context()
     # Lazy init: only initialize current agent, not all 5
     current = agent_name or "fog"
