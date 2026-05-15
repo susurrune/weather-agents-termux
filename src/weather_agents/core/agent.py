@@ -456,6 +456,8 @@ class BaseAgent:
                         if not assistant_stored:
                             self._pop_last_user_message()
                         return
+                    elif event.type == "reasoning" and event.text:
+                        yield {"type": "reasoning", "text": event.text}
                     elif event.type == "done":
                         stream_usage = event.usage
                         streaming_reasoning = event.reasoning_content
@@ -868,6 +870,7 @@ _TOOL_LABELS: dict[str, str] = {
     "fetch_page": "Fetching {url}",
     "delegate_to": "Delegating to {agent}: {task}",
     "use_skill": "Activating {name}",
+    "list_skills": "Listing available skills",
 }
 
 

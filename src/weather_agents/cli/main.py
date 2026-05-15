@@ -283,6 +283,18 @@ def _build_response_panel(
     )
 
 
+def _format_cost(cost: float) -> str:
+    """Format cost adaptively: dollars or cents."""
+    if cost >= 1.0:
+        return f"${cost:.2f}"
+    if cost >= 0.01:
+        return f"${cost:.4f}"
+    if cost > 0.0:
+        cents = cost * 100
+        return f"{cents:.2f}¢"
+    return "$0"
+
+
 def _build_status_line(agent, ctx) -> Text:
     """Build a compact status line: context bar · msgs · cost · model."""
     line = Text()
@@ -305,7 +317,7 @@ def _build_status_line(agent, ctx) -> Text:
         line.append("  ·  ", style="dim")
         line.append(f"{msgs} msgs", style="dim")
         line.append("  ·  ", style="dim")
-        line.append(f"${cost:.4f}", style="dim green" if cost < 0.01 else "dim yellow")
+        line.append(_format_cost(cost), style="dim green" if cost < 0.01 else "dim yellow")
         line.append("  ·  ", style="dim")
         model_short = model if len(model) <= 30 else model[:27] + "…"
         line.append(model_short, style="dim")
@@ -879,6 +891,9 @@ async def _interactive(agent_name: str | None = None) -> None:
             if not inp:
                 continue
 
+            # Update session preview from the first user message
+            with contextlib.suppress(Exception):
+                await agent.memory.update_session_preview()
             cmd = inp.strip()
             cmd_lower = cmd.lower()
 
@@ -1050,6 +1065,7 @@ async def _interactive(agent_name: str | None = None) -> None:
                 md_content = ""
                 status_text = "Thinking..."
                 activities: list[dict] = []
+                _empty_retried = False
 
                 live = Live(
                     _build_stream_display(agent, "", ""),
@@ -1063,6 +1079,9 @@ async def _interactive(agent_name: str | None = None) -> None:
                     async for event in agent.chat_stream(inp):
                         if event["type"] == "content":
                             md_content += event["text"]
+                            live.update(_build_stream_display(agent, status_text, md_content))
+                        elif event["type"] == "reasoning":
+                            status_text = "Thinking..."
                             live.update(_build_stream_display(agent, status_text, md_content))
                         elif event["type"] == "tool_status":
                             status_text = event["label"]
@@ -1097,6 +1116,11 @@ async def _interactive(agent_name: str | None = None) -> None:
                 if not md_content.strip():
                     if interrupted:
                         console.print("  [dim]interrupted[/dim]")
+                    elif not _empty_retried:
+                        _empty_retried = True
+                        console.print("  [dim yellow]empty response, retrying...[/dim yellow]")
+                        await asyncio.sleep(0.5)
+                        continue
                     else:
                         console.print("  [dim yellow]model returned empty response[/dim yellow]")
                     break  # Exit inner loop, back to input
@@ -1393,7 +1417,7 @@ def _print_cost(ctx) -> None:
             str(s.get("calls", 0)),
             f"{s.get('prompt_tokens', 0):,}",
             f"{s.get('completion_tokens', 0):,}",
-            Text(f"${cost:.4f}", style=cost_style),
+            Text(_format_cost(cost), style=cost_style),
         )
 
     # Total row
@@ -1403,7 +1427,7 @@ def _print_cost(ctx) -> None:
         "",
         "",
         "",
-        Text(f"${total_cost:.4f}", style=f"bold {total_style}"),
+        Text(_format_cost(total_cost), style=f"bold {total_style}"),
     )
     console.print(tbl)
 

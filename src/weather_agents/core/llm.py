@@ -86,9 +86,12 @@ def _format_user_facing_error(model: str, err: BaseException | None) -> str:
     lowered = text.lower()
     if "api_key" in lowered or "authentication" in lowered or "unauthorized" in lowered:
         env_var = _PROVIDER_ENV.get(provider or "", "the appropriate *_API_KEY")
+        # Report which providers have keys configured
+        configured = [p for p, e in _PROVIDER_ENV.items() if os.environ.get(e)]
+        hint = f"已配置: {', '.join(configured)}。" if configured else "未配置任何 API key。"
         return (
             f"❌  {model} 调用失败：缺少或无效的 API key。\n"
-            f"请确认 `{env_var}` 已设置，或运行 `wacode init` 重新配置。"
+            f"请确认 `{env_var}` 已设置，或运行 `wacode init` 重新配置。{hint}"
         )
     if "rate limit" in lowered or "429" in text:
         return f"❌  {model} 速率受限，请稍后重试。"
@@ -205,7 +208,7 @@ class LLMResponse:
 class StreamEvent:
     """A single event in a streaming LLM response."""
 
-    type: Literal["content", "tool_call", "done", "error"]
+    type: Literal["content", "tool_call", "done", "error", "reasoning"]
     text: str = ""
     tool_call: dict | None = None
     usage: dict | None = None
@@ -594,6 +597,7 @@ class LLMClient:
                     if reasoning_content is None:
                         reasoning_content = ""
                     reasoning_content += delta.reasoning_content
+                    yield StreamEvent(type="reasoning", text=delta.reasoning_content)
 
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:

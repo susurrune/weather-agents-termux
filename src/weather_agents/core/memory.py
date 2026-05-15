@@ -47,6 +47,8 @@ class Memory:
     async def init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(str(self._db_path))
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA auto_vacuum=INCREMENTAL")
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS memories (
