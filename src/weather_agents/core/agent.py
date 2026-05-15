@@ -127,14 +127,16 @@ class BaseAgent:
                 "\n\n## Behavior\n"
                 '1. Execute tools immediately — no "I will..." or "Let me..." narration before tool calls. Just call them.\n'
                 "2. After completing work: give a 1-2 sentence concise report, no log-style verbosity.\n"
-                "3. Do not use decorative separator lines (---, ***, ___, etc) — the interface handles visual separation."
+                "3. Do not use decorative separator lines (---, ***, ___, etc) — the interface handles visual separation.\n"
+                "4. No emoji in generated web pages — use SVG icons, CSS shapes, or Unicode symbols instead."
             )
         else:
             rules = (
                 "\n\n## 行为守则\n"
                 "1. 执行工具前不赘述 — 不说「我将要...」「让我先...」，直接调用\n"
                 "2. 完成后用 1-2 句简洁汇报结果，不要日志式的冗长叙述\n"
-                "3. 不要使用 ---、***、___ 等装饰性分隔线 — 界面自有视觉分隔"
+                "3. 不要使用 ---、***、___ 等装饰性分隔线 — 界面自有视觉分隔\n"
+                "4. 制作网页时不要使用 emoji 表情符 — 需要图标时使用 SVG 或 CSS 实现"
             )
         return prompt + rules
 

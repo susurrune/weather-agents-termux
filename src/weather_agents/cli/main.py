@@ -990,11 +990,13 @@ async def _interactive(agent_name: str | None = None) -> None:
                 continue
             if cmd_lower == "/auto":
                 INTERACTIVE_MODE = "auto"
-                console.print("  [bold yellow]AUTO[/bold yellow]  mode — auto-continue")
+                console.print("  [bold yellow]AUTO[/bold yellow]  mode — autonomous reasoning & execution")
                 continue
             if cmd_lower == "/plan":
                 INTERACTIVE_MODE = "plan"
-                console.print("  [bold magenta]PLAN[/bold magenta]  mode — plan then execute")
+                console.print(
+                    "  [bold magenta]PLAN[/bold magenta]  mode — plan first, then confirm before execute"
+                )
                 continue
             if cmd_lower.lstrip("/") in AGENT_CLASSES:
                 new_name = cmd_lower.lstrip("/")
