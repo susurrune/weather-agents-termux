@@ -1014,7 +1014,9 @@ async def _interactive(agent_name: str | None = None) -> None:
                     async for event in agent.chat_stream(f"[PLAN] {inp}"):
                         if event["type"] == "content":
                             plan_content += event["text"]
-                            plan_live.update(_build_stream_display(agent, "Planning...", plan_content))
+                            plan_live.update(
+                                _build_stream_display(agent, "Planning...", plan_content)
+                            )
                         elif event["type"] == "done":
                             break
                 except KeyboardInterrupt:
