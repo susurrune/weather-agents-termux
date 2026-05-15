@@ -202,7 +202,7 @@ def _global_options(
     """Top-level Typer callback hosting global flags like --version."""
     _ = version  # Consumed by callback above.
     if ctx.invoked_subcommand is None:
-        chat()
+        chat(agent="fog", message=None)
 
 
 def _strip_hr(markup: str) -> str:
