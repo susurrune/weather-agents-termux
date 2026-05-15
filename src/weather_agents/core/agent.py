@@ -867,6 +867,7 @@ _TOOL_LABELS: dict[str, str] = {
     "scan_deps": "Scanning {directory}",
     "fetch_page": "Fetching {url}",
     "delegate_to": "Delegating to {agent}: {task}",
+    "use_skill": "Activating {name}",
 }
 
 
