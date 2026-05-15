@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 import time
@@ -10,15 +11,19 @@ from typing import Any
 
 import typer
 from rich.console import Console
-
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    import msvcrt as _msvcrt
+else:
+    import termios as _termios
+    import tty as _tty
 
 from weather_agents import __version__
 from weather_agents.core.config import (
@@ -42,6 +47,99 @@ from weather_agents.core.workspace import (
     init_workspace,
     resolve_workspace_path,
 )
+
+# ── Slash commands registry (for popup) ──────────────────────────────────
+
+_COMMANDS: list[tuple[str, str]] = [
+    ("/help", "show all commands"),
+    ("/clear", "clear screen"),
+    ("/status", "agent overview"),
+    ("/cost", "usage & cost"),
+    ("/cost reset", "reset cost counter"),
+    ("/compact", "compress context"),
+    ("/history", "event log"),
+    ("/mcp", "MCP server status"),
+    ("/skills", "list skills"),
+    ("/use ", "activate a skill"),
+    ("/deactivate", "deactivate skills"),
+    ("/sessions", "list sessions"),
+    ("/session new ", "start new session"),
+    ("/session load ", "switch session"),
+    ("/session delete ", "delete session"),
+    ("/memory", "memory stats"),
+    ("/memory clear", "clear short-term memory"),
+    ("/workspace", "workspace info"),
+    ("/workspace set ", "set workspace path"),
+    ("/workspace auto", "auto-detect workspace"),
+    ("/model", "view/change model"),
+    ("/model ", "set per-agent model"),
+    ("/apikey", "manage API keys"),
+    ("/apikey set ", "add/replace API key"),
+    ("/apikey del ", "remove API key"),
+    ("/task ", "multi-agent orchestration"),
+    ("/fog", "switch to Fog"),
+    ("/rain", "switch to Rain"),
+    ("/frost", "switch to Frost"),
+    ("/snow", "switch to Snow"),
+    ("/dew", "switch to Dew"),
+    ("/version", "version info"),
+    ("/quit", "exit chat"),
+]
+
+_COMMAND_LOOKUP: dict[str, str] = {c[0].split()[0].lstrip("/"): c[0] for c in _COMMANDS}
+
+# ── Cross-platform key reader ─────────────────────────────────────────────
+
+
+def _get_key() -> str:
+    """Read a single keypress. Returns named tokens for special keys."""
+    if sys.platform == "win32":
+        ch = _msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            ch2 = _msvcrt.getwch()
+            return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(ch2, ch2)
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        if ch == "\x1b":
+            return "esc"
+        if ch == "\r":
+            return "enter"
+        if ch == "\x08":
+            return "backspace"
+        if ch == "\t":
+            return "tab"
+        return ch
+    else:
+        fd = sys.stdin.fileno()
+        old = _termios.tcgetattr(fd)
+        try:
+            _tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                nxt = sys.stdin.read(2)
+                if nxt == "[A":
+                    return "up"
+                if nxt == "[B":
+                    return "down"
+                if nxt == "[C":
+                    return "right"
+                if nxt == "[D":
+                    return "left"
+                if nxt in ("[Z", "OQ", "OP", "OQ"):
+                    return "tab"
+                return "esc"
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if ch == "\r":
+                return "enter"
+            if ch in ("\x7f", "\x08"):
+                return "backspace"
+            if ch == "\t":
+                return "tab"
+            return ch
+        finally:
+            _termios.tcsetattr(fd, _termios.TCSADRAIN, old)
+
 
 app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=True)
 console = Console()
@@ -92,46 +190,24 @@ def _build_stream_display(
     spin = _next_spin()
     header = f"  {spin}  {agent.emoji}  [bold {color}]{agent.display_name}[/bold {color}]  [dim]{status_text or 'thinking...'}[/dim]"
 
-    if not activities:
-        tbl = Table(show_header=False, box=None, padding=0, expand=True)
-        tbl.add_column(ratio=1)
-        tbl.add_row(Text(header))
-        tbl.add_row(Text("─" * min(console.width, 100), style="dim"))
-        if md_content:
-            tbl.add_row(Markdown(md_content))
-        return tbl
-
-    # Two-column: left = content, right = activity log
-    tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-    tbl.add_column(ratio=7)
-    tbl.add_column(ratio=3)
-
-    inner = Table(show_header=False, box=None, padding=0)
-    inner.add_column(ratio=1)
-    inner.add_row(Text(header))
-    inner.add_row(Text("─" * 40, style="dim"))
+    tbl = Table(show_header=False, box=None, padding=0, expand=True)
+    tbl.add_column(ratio=1)
+    tbl.add_row(Text(header))
+    tbl.add_row(Text("─" * min(console.width, 100), style="dim"))
     if md_content:
-        inner.add_row(Markdown(md_content))
+        tbl.add_row(Markdown(md_content))
 
-    act = Table(show_header=False, box=None, padding=(0, 0), expand=True)
-    act.add_column(style="dim")
-    for a in activities[-12:]:
-        s = a["status"]
-        icon = (
-            "[green]✓[/green]"
-            if s == "done"
-            else "[red]✗[/red]"
-            if s == "error"
-            else "[yellow]●[/yellow]"
-        )
-        act.add_row(f"{icon}  [dim]{a['label']}[/dim]")
-    if not [a for a in activities if a["status"] not in ("done", "error")]:
-        act.add_row("")
-        act.add_row("[dim]  — idle —[/dim]")
-
-    right = Panel(act, title="Activity", border_style="dim", padding=(0, 1))
-
-    tbl.add_row(inner, right)
+    if activities:
+        for a in activities[-6:]:
+            s = a["status"]
+            icon = (
+                "[green]✓[/green]"
+                if s == "done"
+                else "[red]✗[/red]"
+                if s == "error"
+                else "[yellow]●[/yellow]"
+            )
+            tbl.add_row(Text(f"  {icon}  [dim]{a['label']}[/dim]"))
     return tbl
 
 
@@ -143,10 +219,8 @@ def _build_response_panel(
 ) -> Panel:
     """Build a Panel for the final agent response."""
     color = AGENT_COLORS.get(agent.name, "white")
-    title = f"{agent.emoji}  {agent.display_name}"
-    subtitle = f"{elapsed:.1f}s"
-    if interrupted:
-        subtitle += " (interrupted)"
+    title = f"{agent.emoji} {agent.display_name}"
+    subtitle = f"{elapsed:.1f}s" + (" (interrupted)" if interrupted else "")
     return Panel(
         Markdown(content),
         title=title,
@@ -190,12 +264,12 @@ def _build_status_line(agent, ctx) -> str:
 
 async def _chat_single(agent_name: str, message: str) -> None:
     ctx = create_system_context()
-    await ctx.init_all()
+    agent = ctx.agent_map.get(agent_name)
+    if not agent:
+        console.print(f"[red]Unknown agent: {agent_name}[/red]")
+        return
+    await _init_agent_lazy(agent, ctx)
     try:
-        agent = ctx.agent_map.get(agent_name)
-        if not agent:
-            console.print(f"[red]Unknown agent: {agent_name}[/red]")
-            return
         t0 = time.monotonic()
         status_handle = console.status(
             f"[dim]{agent.emoji} {agent.display_name} thinking...[/dim]",
@@ -216,40 +290,207 @@ async def _chat_single(agent_name: str, message: str) -> None:
         await ctx.close_all()
 
 
+async def _init_agent_lazy(agent, ctx) -> None:
+    """Init an agent if not already initialized. Used for lazy startup."""
+    if not agent._base_system_prompt:
+        await agent.init()
+        # Init MCP if configured (only on first agent init)
+        if ctx.mcp is not None and ctx.mcp._server_configs and not ctx.mcp_status:
+            with contextlib.suppress(Exception):
+                ctx.mcp_status = await ctx.mcp.connect_all()
+
+
+def _build_input_display(
+    agent,
+    ctx,
+    buffer: str,
+    popup_visible: bool,
+    selected_idx: int,
+    filtered_commands: list[tuple[str, str]],
+) -> list:
+    """Build renderables for the input area with optional command popup."""
+    color = AGENT_COLORS.get(agent.name, "cyan")
+    results: list = []
+
+    # Top border + status
+    status = _build_status_line(agent, ctx)
+    top_line = Text()
+    top_line.append("  ── ", style="dim")
+    if status:
+        top_line.append(Text.from_markup(status))
+    top_line.append(" ──" + "─" * max(0, console.width - len(status) - 12), style="dim")
+    results.append(top_line)
+
+    # Prompt line
+    prompt = Text()
+    prompt.append("  ")
+    prompt.append(f"{agent.emoji} ", style=f"bold {color}")
+    prompt.append(f"{agent.display_name}", style=f"bold {color}")
+    prompt.append(" ▸ ", style=f"bold {color}")
+    if buffer:
+        # Highlight /command text in cyan
+        if buffer.startswith("/"):
+            space_idx = buffer.find(" ")
+            if space_idx > 0:
+                prompt.append(buffer[:space_idx], style="cyan")
+                prompt.append(buffer[space_idx:], style="white")
+            else:
+                prompt.append(buffer, style="cyan")
+        else:
+            prompt.append(buffer, style="white")
+    prompt.append("█", style="bold")  # cursor
+    results.append(prompt)
+
+    # Bottom border
+    hint = (
+        "↑↓ navigate  tab complete  esc dismiss  enter send" if popup_visible else "/ for commands"
+    )
+    bottom_line = Text()
+    bottom_line.append("  ── ", style="dim")
+    bottom_line.append(hint, style="dim")
+    bottom_line.append(" " + "─" * max(0, console.width - len(hint) - 10), style="dim")
+    results.append(bottom_line)
+
+    # Popup
+    if popup_visible and filtered_commands:
+        popup_rows: list[str] = []
+        start = max(0, min(selected_idx - 6, len(filtered_commands) - 14))
+        end = min(len(filtered_commands), start + 14)
+        if start > 0:
+            popup_rows.append("  [dim]... ↑ more[/dim]")
+        for i in range(start, end):
+            cmd, desc = filtered_commands[i]
+            marker = "❯" if i == selected_idx else " "
+            c_style = "bold cyan" if i == selected_idx else "dim"
+            popup_rows.append(f" {marker} [{c_style}]{cmd}[/{c_style}]  {desc}")
+        if end < len(filtered_commands):
+            popup_rows.append("  [dim]... ↓ more[/dim]")
+        popup = Panel(
+            "\n".join(popup_rows),
+            title="Commands",
+            border_style="cyan",
+            padding=(0, 1),
+            width=60,
+        )
+        results.append(popup)
+
+    return results
+
+
+def _read_line_with_popup(agent, ctx) -> str:
+    """Read a line of input with slash-command popup support."""
+    # Fall back to simple input when stdin is not a TTY (piped / test env)
+    if not sys.stdin.isatty():
+        color = AGENT_COLORS.get(agent.name, "cyan")
+        prompt = Text()
+        prompt.append(f"  {agent.emoji} ", style=f"bold {color}")
+        prompt.append(f"{agent.display_name}", style=f"bold {color}")
+        prompt.append(" ▸ ", style=f"bold {color}")
+        return console.input(prompt)
+
+    buffer: list[str] = []
+    popup_visible = False
+    selected_idx = 0
+
+    with Live(
+        Table(show_header=False, box=None, padding=0),
+        console=console,
+        refresh_per_second=30,
+        transient=False,
+    ) as live:
+        while True:
+            text = "".join(buffer)
+            filtered = [c for c in _COMMANDS if c[0].startswith(text)] if popup_visible else []
+            if filtered and selected_idx >= len(filtered):
+                selected_idx = len(filtered) - 1
+
+            tbl = Table(show_header=False, box=None, padding=0, expand=True)
+            tbl.add_column(ratio=1)
+            for item in _build_input_display(
+                agent, ctx, text, popup_visible, selected_idx, filtered
+            ):
+                tbl.add_row(item)
+            live.update(tbl)
+
+            try:
+                key = _get_key()
+            except KeyboardInterrupt:
+                raise
+
+            if key == "enter":
+                result = "".join(buffer).strip()
+                if result:
+                    console.print()
+                    return result
+                continue
+
+            if key == "esc":
+                if popup_visible:
+                    popup_visible = False
+                    buffer.clear()
+                    selected_idx = 0
+                else:
+                    buffer.clear()
+                continue
+
+            if key == "backspace":
+                if buffer:
+                    buffer.pop()
+                    if not buffer:
+                        popup_visible = False
+                        selected_idx = 0
+                continue
+
+            if popup_visible and filtered:
+                if key == "up":
+                    selected_idx = max(0, selected_idx - 1)
+                elif key == "down":
+                    selected_idx = min(len(filtered) - 1, selected_idx + 1)
+                elif key == "tab":
+                    buffer[:] = list(filtered[selected_idx][0])
+                    if not filtered[selected_idx][0].endswith(" "):
+                        buffer.append(" ")
+                    popup_visible = False
+                elif isinstance(key, str) and len(key) == 1 and key.isprintable():
+                    buffer.append(key)
+                    selected_idx = 0
+                continue
+
+            if isinstance(key, str) and len(key) == 1:
+                if key == "/" and not buffer:
+                    buffer.append(key)
+                    popup_visible = True
+                    selected_idx = 0
+                elif key.isprintable():
+                    buffer.append(key)
+                    if buffer == ["/"]:
+                        popup_visible = True
+                        selected_idx = 0
+                    elif popup_visible:
+                        selected_idx = 0
+
+
 async def _interactive(agent_name: str | None = None) -> None:
     ctx = create_system_context()
-    await ctx.init_all()
+    # Lazy init: only initialize current agent, not all 5
+    current = agent_name or "fog"
+    agent = ctx.agent_map[current]
+    await _init_agent_lazy(agent, ctx)
+    model = ctx.config.llm.default_model
+    ws = getattr(ctx, "workspace_path", "")
+    workspace_path = ws if isinstance(ws, str) else ""
+    _print_welcome(model, workspace_path)
 
     try:
         agents = ctx.agent_map
-        current = agent_name or "fog"
-        agent = agents[current]
-        model = ctx.config.llm.default_model
-        ws = getattr(ctx, "workspace_path", "")
-        workspace_path = ws if isinstance(ws, str) else ""
-        _print_welcome(model, workspace_path)
 
         while True:
-            console.print()
-            # Status bar: context usage + model + cost
-            status = _build_status_line(agent, ctx)
-            if status:
-                console.print(Text(status))
-                console.print(Text("  " + "─" * min(console.width - 2, 98), style="dim"))
-            else:
-                console.print(Text("  " + "─" * min(console.width - 2, 98), style="dim"))
             try:
-                color = AGENT_COLORS.get(agent.name, "cyan")
-                prompt = Text()
-                prompt.append("  ")
-                prompt.append(f"{agent.emoji} ", style=f"bold {color}")
-                prompt.append(f"{agent.display_name}", style=f"bold {color}")
-                prompt.append(" ▸ ", style=f"bold {color}")
-                inp = console.input(prompt)
+                inp = _read_line_with_popup(agent, ctx)
             except (EOFError, KeyboardInterrupt):
                 console.print()
                 break
-            if not inp.strip():
+            if not inp:
                 continue
 
             cmd = inp.strip()
@@ -288,11 +529,8 @@ async def _interactive(agent_name: str | None = None) -> None:
                     )
                 continue
             if cmd_lower == "/compact":
-                with console.status(
-                    f"[dim]{agent.emoji} compacting...[/dim]", spinner="dots"
-                ) as status_handle:
-                    result = await agent.compact()
-                    status_handle.stop()
+                await _init_agent_lazy(agent, ctx)
+                result = await agent.compact()
                 console.print(f"  [green]✓ {result}[/green]")
                 continue
             if cmd_lower == "/history":
@@ -335,6 +573,9 @@ async def _interactive(agent_name: str | None = None) -> None:
             if cmd_lower.startswith("/task "):
                 goal = cmd[6:].strip()
                 if goal:
+                    # Lazy-init all agents for orchestration
+                    for ag in agents.values():
+                        await _init_agent_lazy(ag, ctx)
                     await _run_task(goal, agents)
                 continue
             if cmd_lower.startswith("/model"):
@@ -347,9 +588,12 @@ async def _interactive(agent_name: str | None = None) -> None:
                 console.print(f"  Weather Agents [bold]v{__version__}[/bold]")
                 continue
             if cmd_lower.lstrip("/") in AGENT_CLASSES:
-                current = cmd_lower.lstrip("/")
-                agent = agents[current]
-                color = AGENT_COLORS.get(current, "white")
+                new_name = cmd_lower.lstrip("/")
+                new_agent = agents[new_name]
+                await _init_agent_lazy(new_agent, ctx)
+                current = new_name
+                agent = new_agent
+                color = AGENT_COLORS.get(new_name, "white")
                 console.print(
                     f"  [dim]switched to[/dim] {agent.emoji} [bold {color}]{agent.display_name}[/bold {color}]"
                 )
@@ -359,8 +603,8 @@ async def _interactive(agent_name: str | None = None) -> None:
                 continue
 
             # --- Streaming chat with tool-call support ---
+            await _init_agent_lazy(agent, ctx)
             t0 = time.monotonic()
-            console.print()
             interrupted = False
             md_content = ""
             status_text = ""
@@ -401,7 +645,6 @@ async def _interactive(agent_name: str | None = None) -> None:
             except KeyboardInterrupt:
                 interrupted = True
             finally:
-                # Replace stream display with final response panel
                 if md_content.strip():
                     live.update(
                         _build_response_panel(agent, md_content, time.monotonic() - t0, interrupted)
@@ -414,8 +657,6 @@ async def _interactive(agent_name: str | None = None) -> None:
                 else:
                     console.print("  [red]no response[/red]")
                 continue
-
-            console.print()
 
     finally:
         console.print("\n  [dim]bye[/dim]")
@@ -439,47 +680,26 @@ def _print_welcome(model: str, workspace_path: str = "") -> None:
     console.print(logo, justify="center")
 
     agents_info = [
-        ("\U0001f32b", "雾", "Fog", "探索研究", AGENT_COLORS["fog"], "~ ~ ~"),
-        ("\U0001f327", "雨", "Rain", "生成创造", AGENT_COLORS["rain"], "' ' '"),
-        ("❄", "霜", "Frost", "审查优化", AGENT_COLORS["frost"], "* + *"),
-        ("\U0001f328", "雪", "Snow", "规划编排", AGENT_COLORS["snow"], ". * ."),
-        ("\U0001f4a7", "露", "Dew", "运维集成", AGENT_COLORS["dew"], "o o o"),
+        ("\U0001f32b", "Fog", "探索", AGENT_COLORS["fog"]),
+        ("\U0001f327", "Rain", "生成", AGENT_COLORS["rain"]),
+        ("❄", "Frost", "审查", AGENT_COLORS["frost"]),
+        ("\U0001f328", "Snow", "规划", AGENT_COLORS["snow"]),
+        ("\U0001f4a7", "Dew", "运维", AGENT_COLORS["dew"]),
     ]
-
-    tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-    for _ in agents_info:
-        tbl.add_column(justify="center", ratio=1)
-
-    icon_row = []
-    name_row = []
-    role_row = []
-    deco_row = []
-    for emoji, cn, en, role, color, deco in agents_info:
-        icon_row.append(Text(emoji, style=f"bold {color}"))
-        name_row.append(Text(f"{cn} {en}", style=f"bold {color}"))
-        role_row.append(Text(role, style="dim"))
-        deco_row.append(Text(deco, style=f"dim {color}"))
-
-    tbl.add_row(*deco_row)
-    tbl.add_row(*icon_row)
-    tbl.add_row(*name_row)
-    tbl.add_row(*role_row)
-
-    console.print(tbl)
-    console.print()
+    agent_line = Text(justify="center")
+    for emoji, name, _role, color in agents_info:
+        agent_line.append(f"  {emoji} ", style=f"bold {color}")
+        agent_line.append(f"[{color}]{name}[/{color}] ", style=f"bold {color}")
+    console.print(agent_line, justify="center")
 
     status_line = Text(justify="center")
-    status_line.append("  model: ", style="dim")
+    status_line.append("model: ", style="dim")
     status_line.append(model, style="cyan")
-    status_line.append("  |  ", style="dim")
     if workspace_path:
-        status_line.append("workspace: ", style="dim")
+        status_line.append("  ws: ", style="dim")
         status_line.append(workspace_path, style="magenta")
-        status_line.append("  |  ", style="dim")
-    status_line.append(f"v{__version__}", style="dim")
-    status_line.append("  |  ", style="dim")
-    status_line.append("/help", style="bold dim")
-    status_line.append(" for commands", style="dim")
+    status_line.append("  ", style="dim")
+    status_line.append("/ for commands", style="bold dim")
     console.print(status_line, justify="center")
 
 

@@ -810,6 +810,7 @@ def register_builtin_tools() -> None:
                 ToolParameter(name="content", type="string", description="Content to write"),
             ],
             handler=_write_file,
+            dangerous=True,
         ),
         Tool(
             name="edit_file",
@@ -887,6 +888,7 @@ def register_builtin_tools() -> None:
                 ),
             ],
             handler=_shell_exec,
+            dangerous=True,
         ),
         Tool(
             name="http_get",
@@ -983,6 +985,7 @@ def register_builtin_tools() -> None:
                 ToolParameter(name="dst", type="string", description="Destination path"),
             ],
             handler=_move_file,
+            dangerous=True,
         ),
         Tool(
             name="copy_file",
@@ -1002,6 +1005,7 @@ def register_builtin_tools() -> None:
                 ),
             ],
             handler=_delete_file,
+            dangerous=True,
         ),
         Tool(
             name="get_cwd",

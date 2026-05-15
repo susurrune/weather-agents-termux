@@ -10,9 +10,12 @@ from enum import StrEnum
 from weather_agents.core.bus import Event, EventType, MessageBus
 from weather_agents.core.config import AppConfig
 from weather_agents.core.llm import LLMClient, LLMResponse
+from weather_agents.core.logger import get_logger
 from weather_agents.core.memory import Memory
 from weather_agents.core.skill import Skill, SkillRegistry
 from weather_agents.core.tool import Tool, ToolRegistry
+
+_log = get_logger("agent")
 
 
 class AgentState(StrEnum):
@@ -373,6 +376,15 @@ class BaseAgent:
                     else:
                         tool = self.tool_registry.get(tool_name)
                         if tool:
+                            if tool.dangerous:
+                                _log.warning(
+                                    "dangerous_tool_call",
+                                    extra={
+                                        "tool": tool_name,
+                                        "agent": self.name,
+                                        "args": dict(tool_args) if tool_args else {},
+                                    },
+                                )
                             await self._set_state(AgentState.ACTING)
                             try:
                                 result = await tool.execute(**tool_args)
@@ -589,6 +601,15 @@ class BaseAgent:
                         tool_call_id=tc["id"],
                     )
                 elif tool:
+                    if tool.dangerous:
+                        _log.warning(
+                            "dangerous_tool_call",
+                            extra={
+                                "tool": tool_name,
+                                "agent": self.name,
+                                "args": dict(tool_args) if tool_args else {},
+                            },
+                        )
                     await self._set_state(AgentState.ACTING)
                     result = await tool.execute(**tool_args)
                     self.memory.add_message(

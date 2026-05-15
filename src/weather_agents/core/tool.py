@@ -29,6 +29,7 @@ class Tool:
     handler: Callable[..., Coroutine[Any, Any, str]] | None = None
     max_retries: int = 2
     retry_delay: float = 0.5
+    dangerous: bool = False  # 坑3: high-risk tools need audit + approval
 
     def to_function_schema(self) -> dict:
         """Convert to OpenAI function calling schema."""
