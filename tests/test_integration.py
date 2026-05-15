@@ -230,12 +230,13 @@ class TestAgentInitChatToolResponse:
 
     @pytest.mark.asyncio
     async def test_all_five_agents_init_and_chat(self, tool_registry, mock_llm, bus):
-        """All five agent classes can init and respond to a simple message."""
+        """All agent classes can init and respond to a simple message."""
         from weather_agents.agents.dew import DewAgent
         from weather_agents.agents.fog import FogAgent
         from weather_agents.agents.frost import FrostAgent
         from weather_agents.agents.rain import RainAgent
         from weather_agents.agents.snow import SnowAgent
+        from weather_agents.agents.sunshine import SunshineAgent
 
         mock_llm.complete.return_value = Mock(
             content="test response",
@@ -245,7 +246,7 @@ class TestAgentInitChatToolResponse:
             reasoning_content=None,
         )
 
-        for agent_cls in (FogAgent, RainAgent, FrostAgent, SnowAgent, DewAgent):
+        for agent_cls in (FogAgent, RainAgent, FrostAgent, SnowAgent, DewAgent, SunshineAgent):
             agent = agent_cls(
                 config=AppConfig(), llm=mock_llm, bus=bus, tool_registry=tool_registry
             )

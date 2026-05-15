@@ -134,6 +134,9 @@ class AgentConfigs:
     frost: AgentModelConfig = field(default_factory=lambda: AgentModelConfig(specialty="审查优化"))
     snow: AgentModelConfig = field(default_factory=lambda: AgentModelConfig(specialty="规划编排"))
     dew: AgentModelConfig = field(default_factory=lambda: AgentModelConfig(specialty="运维集成"))
+    sunshine: AgentModelConfig = field(
+        default_factory=lambda: AgentModelConfig(specialty="情感陪伴")
+    )
 
 
 @dataclass

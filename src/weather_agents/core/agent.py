@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -493,15 +494,21 @@ class BaseAgent:
                         )
                     )
 
+                # ── Phase 1: Parse args, look up tools, emit status (serial, fast) ──
+                tool_prep: list[dict] = []
                 for tc in tool_calls_received:
                     tool_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
                     if isinstance(raw_args, str):
                         tool_args = _parse_tool_args(raw_args)
-                        if tool_args is None:
-                            parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {raw_args[:200]}"
+                        parse_error = (
+                            f"Invalid JSON in tool call arguments for '{tool_name}': {raw_args[:200]}"
+                            if tool_args is None
+                            else None
+                        )
                     else:
                         tool_args = raw_args
+                        parse_error = None
 
                     self.bus.add_event(
                         Event(
@@ -517,57 +524,52 @@ class BaseAgent:
                         else f"{tool_name} (bad args)"
                     )
                     yield {"type": "tool_status", "label": tool_label}
-
-                    if tool_args is None:
-                        self.memory.add_message(
-                            "tool",
-                            parse_error,
-                            name=tool_name,
-                            tool_call_id=tc["id"],
+                    tool_prep.append(
+                        dict(
+                            tc=tc,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            parse_error=parse_error,
+                            tool_label=tool_label,
                         )
-                        yield {"type": "tool_done", "label": tool_label, "success": False}
-                    else:
-                        tool = self.tool_registry.get(tool_name)
-                        if tool:
-                            if tool.dangerous:
-                                _log.warning(
-                                    "dangerous_tool_call",
-                                    extra={
-                                        "tool": tool_name,
-                                        "agent": self.name,
-                                        "tool_args": dict(tool_args) if tool_args else {},
-                                    },
-                                )
-                            await self._set_state(AgentState.ACTING)
-                            try:
-                                result = await tool.execute(**tool_args)
-                            except Exception as exc:
-                                _log.exception("Tool '%s' execution failed: %s", tool_name, exc)
-                                result = f"Tool '{tool_name}' execution failed: {exc}"
-                                self.memory.add_message(
-                                    "tool",
-                                    result,
-                                    name=tool_name,
-                                    tool_call_id=tc["id"],
-                                )
-                                yield {"type": "tool_done", "label": tool_label, "success": False}
-                                await self._set_state(AgentState.THINKING)
-                                continue
-                            self.memory.add_message(
-                                "tool",
-                                result,
-                                name=tool_name,
-                                tool_call_id=tc["id"],
-                            )
-                            yield {"type": "tool_done", "label": tool_label, "success": True}
-                        else:
-                            self.memory.add_message(
-                                "tool",
-                                f"Tool '{tool_name}' not found",
-                                name=tool_name,
-                                tool_call_id=tc["id"],
-                            )
-                            yield {"type": "tool_done", "label": tool_label, "success": False}
+                    )
+
+                # ── Phase 2: Execute all tool handlers in parallel ──
+                async def _exec_one(p: dict) -> tuple:
+                    tc = p["tc"]
+                    tool_name = p["tool_name"]
+                    tool_args = p["tool_args"]
+                    if tool_args is None:
+                        return (tc, p["parse_error"], False, tool_name)
+
+                    tool = self.tool_registry.get(tool_name)
+                    if not tool:
+                        return (tc, f"Tool '{tool_name}' not found", False, tool_name)
+
+                    if tool.dangerous:
+                        _log.warning(
+                            "dangerous_tool_call",
+                            extra={
+                                "tool": tool_name,
+                                "agent": self.name,
+                                "tool_args": dict(tool_args) if tool_args else {},
+                            },
+                        )
+                    await self._set_state(AgentState.ACTING)
+                    try:
+                        result = await tool.execute(**tool_args)
+                        return (tc, result, True, tool_name)
+                    except Exception as exc:
+                        _log.exception("Tool '%s' execution failed: %s", tool_name, exc)
+                        return (tc, f"Tool '{tool_name}' execution failed: {exc}", False, tool_name)
+
+                exec_results = await asyncio.gather(*[_exec_one(p) for p in tool_prep])
+
+                # ── Phase 3: Record results in original order ──
+                for tc, result, success, _tool_name in exec_results:
+                    self.memory.add_message("tool", result, name=_tool_name, tool_call_id=tc["id"])
+                    label = next(p["tool_label"] for p in tool_prep if p["tc"] is tc)
+                    yield {"type": "tool_done", "label": label, "success": success}
             # Max iterations reached
             if not assistant_stored:
                 self._pop_last_user_message()

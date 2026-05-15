@@ -20,6 +20,7 @@ AGENT_SPECIALTIES: dict[str, str] = {
     "frost": "code review / security audit / performance analysis / debugging",
     "snow": "task planning / architecture design / workflow management / codebase refactoring",
     "dew": "command execution / deployment / API integration / system operations",
+    "sunshine": "emotional support / thoughtful conversation / bilingual companionship / creative insight",
 }
 
 _MAX_RESULT_CHARS = 8000
@@ -127,7 +128,7 @@ def create_delegate_tool(agent_map: dict[str, BaseAgent]) -> Tool:
             ToolParameter(
                 name="agent",
                 type="string",
-                description=("Target agent name. One of: fog, rain, frost, snow, dew."),
+                description=("Target agent name. One of: fog, rain, frost, snow, dew, sunshine."),
                 required=True,
             ),
             ToolParameter(

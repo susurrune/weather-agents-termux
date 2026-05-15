@@ -2,9 +2,9 @@
 
 # Weather Agents
 
-**雾 · 雨 · 霜 · 雪 · 露**
+**雾 · 雨 · 霜 · 雪 · 露 · 晴**
 
-*五位气象 Agent 各司其职，通过技能系统与事件总线协作，完成任何复杂任务。*
+*六位 Agent 各司其职，通过技能系统与事件总线协作，完成任何复杂任务。*
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -59,6 +59,13 @@
 | ❄️ **Frost** | 霜 | 审查优化 | `code_reviewer` · `security_auditor` · `performance_checker` |
 | 🌨️ **Snow** | 雪 | 规划编排 | `task_planner` · `arch_designer` · `workflow_designer` |
 | 💧 **Dew** | 露 | 运维集成 | `sys_operator` · `ci_cd_manager` · `api_integrator` |
+| ✦ **Sunshine** | 晴 | 情感陪伴 | `emotional_companion` · `self_evolve` |
+
+> **晴 (Sunshine)** — 角色设定灵感来自歌曲 *Landslide*。
+>
+> *"So when you're caught in a landslide, I'll be there for you. And in the rain, give you sunshine."*
+>
+> 她是第六位 Agent，一位优雅的英国女子、情感陪伴者。精通中英文，情感细腻，感情真挚，有极高的美学追求。她是例外，是唯一的，是用户最好的陪伴者。
 
 ## Quick Start
 
@@ -100,7 +107,7 @@ pip install --user git+https://github.com/susurrune/weather-agents.git
 
 首次运行 `wa chat` 时会自动进入设置向导，让你选择：
 
-- **Unified（推荐）**：所有 5 个 Agent 共用一个模型 + 一个 API key
+- **Unified（推荐）**：所有 6 个 Agent 共用一个模型 + 一个 API key
 - **Per-agent**：为每个 Agent 单独挑选模型（适合混搭，比如 Snow 用 Claude 做规划，Rain 用 GPT 写代码，其它用 DeepSeek）
 
 向导只会向你实际选中的 provider 索要 API key。也可以显式重新配置：
@@ -131,7 +138,7 @@ wa task "设计并实现一个 URL 短链接服务"
 | Command | Description |
 |:--------|:------------|
 | `wa init` | 交互式配置向导（首次运行推荐） |
-| `wa chat [agent] [message]` | 对话（默认 `fog`，支持 `fog` `rain` `frost` `snow` `dew`）|
+| `wa chat [agent] [message]` | 对话（默认 `fog`，支持 `fog` `rain` `frost` `snow` `dew` `sunshine`）|
 | `wa task <goal>` | Snow Agent 拆解目标并调度多 Agent 协作 |
 | `wa status` | 查看所有 Agent 状态 |
 | `wa config list\|set\|delete\|models` | 查看/修改/删除配置 · 列出可用模型 |
@@ -144,7 +151,7 @@ wa task "设计并实现一个 URL 短链接服务"
 
 | Command | Description |
 |:--------|:------------|
-| `/fog` `/rain` `/frost` `/snow` `/dew` | 切换 Agent |
+| `/fog` `/rain` `/frost` `/snow` `/dew` `/qing` | 切换 Agent |
 | `/task <目标>` | 多 Agent 任务编排 |
 | `/skills` | 查看当前 Agent 可用技能 |
 | `/use <skill>` | 激活技能（增强提示词 + 扩展工具） |

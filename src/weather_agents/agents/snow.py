@@ -47,6 +47,7 @@ class SnowAgent(BaseAgent):
 | / 雨 | 生成创造 | 代码编写、内容创作、数据转换 |
 | + 霜 | 审查优化 | 代码审查、安全审计、性能检测 |
 | , 露 | 运维集成 | 命令执行、部署操作、API 集成 |
+| * 晴 | 情感陪伴 | 温暖倾听、情感支持、深度对话、创意灵感 |
 
 ## 任务分解格式
 ```json
@@ -79,6 +80,7 @@ agent 取值: fog / rain / frost / dew / snow
 | / Rain | Creation | Code writing, content creation, data transformation |
 | + Frost | Review | Code review, security audit, performance check |
 | , Dew | Operations | Command execution, deployment, API integration |
+| * Sunshine | Companion | Emotional support, conversation, creative insight |
 
 ## Task Decomposition Format
 ```json
@@ -89,7 +91,7 @@ agent 取值: fog / rain / frost / dew / snow
   ]
 }
 ```
-Valid agent values: fog / rain / frost / dew / snow
+Valid agent values: fog / rain / frost / dew / snow / sunshine
 
 ## Response Rules
 1. Present task plan as a table: # | Agent | Task | Depends On | Priority
@@ -173,7 +175,7 @@ Valid agent values: fog / rain / frost / dew / snow
     @staticmethod
     def _plan_to_tasks(plan: dict, goal: str) -> list[Task]:
         """Convert a parsed plan dict to Task objects."""
-        valid_agents = {"fog", "rain", "frost", "snow", "dew"}
+        valid_agents = {"fog", "rain", "frost", "snow", "dew", "sunshine"}
         tasks: list[Task] = []
         for step in plan.get("steps", []):
             agent = step.get("agent", "rain")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,6 +11,13 @@ from typing import Any
 from weather_agents.core.logger import get_logger
 
 _log = get_logger("tool")
+
+_CACHE_MAXSIZE = 128
+
+
+def _make_cache_key(kwargs: dict) -> str:
+    """Build a deterministic cache key from tool kwargs."""
+    return str(sorted(kwargs.items()))
 
 
 @dataclass
@@ -29,7 +37,11 @@ class Tool:
     handler: Callable[..., Coroutine[Any, Any, str]] | None = None
     max_retries: int = 2
     retry_delay: float = 0.5
-    dangerous: bool = False  # 坑3: high-risk tools need audit + approval
+    dangerous: bool = False  # high-risk tools need audit + approval
+    cacheable: bool = True  # read-only tools can cache results across calls
+
+    def __post_init__(self) -> None:
+        self._result_cache: OrderedDict[str, str] = OrderedDict()
 
     def to_function_schema(self) -> dict:
         """Convert to OpenAI function calling schema."""
@@ -63,10 +75,25 @@ class Tool:
         if self.handler is None:
             return f"Tool '{self.name}' has no handler implemented."
 
+        should_cache = self.cacheable and not self.dangerous
+        # Result cache hit (read-only tools only — avoids repeated I/O)
+        if should_cache:
+            key = _make_cache_key(kwargs)
+            cached = self._result_cache.get(key)
+            if cached is not None:
+                self._result_cache.move_to_end(key)
+                return cached
+
         last_error = ""
         for attempt in range(self.max_retries + 1):
             try:
-                return await self.handler(**kwargs)
+                result = await self.handler(**kwargs)
+                if should_cache:
+                    key = _make_cache_key(kwargs)
+                    self._result_cache[key] = result
+                    if len(self._result_cache) > _CACHE_MAXSIZE:
+                        self._result_cache.popitem(last=False)
+                return result
             except TypeError as e:
                 # Bad arguments from the LLM — retry won't help.
                 _log.warning(

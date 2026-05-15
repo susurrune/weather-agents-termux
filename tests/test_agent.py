@@ -633,6 +633,8 @@ class TestPopLastUserMessage:
         agent = FogAgent(config=app_config, llm=mock_llm, bus=bus, tool_registry=tool_registry)
         await agent.init()
 
+        # Clear non-system messages to avoid interference from persisted state
+        agent.memory.short_term = [m for m in agent.memory.short_term if m.role == "system"]
         user_before = sum(1 for m in agent.memory.short_term if m.role == "user")
         agent.memory.add_message("user", "new-msg-to-pop")
         agent.memory.add_message("assistant", "reply")

@@ -15,6 +15,7 @@ from weather_agents.agents.fog import FogAgent
 from weather_agents.agents.frost import FrostAgent
 from weather_agents.agents.rain import RainAgent
 from weather_agents.agents.snow import SnowAgent
+from weather_agents.agents.sunshine import SunshineAgent
 from weather_agents.core.agent import BaseAgent
 from weather_agents.core.agent import Task as AgentTask
 from weather_agents.core.bus import MessageBus
@@ -38,6 +39,7 @@ AGENT_CLASSES = {
     "frost": FrostAgent,
     "snow": SnowAgent,
     "dew": DewAgent,
+    "sunshine": SunshineAgent,
 }
 
 AGENT_EMOJI = {
@@ -46,6 +48,7 @@ AGENT_EMOJI = {
     "frost": "+",
     "snow": "·",
     "dew": ",",
+    "sunshine": "*",
 }
 
 AGENT_COLORS: dict[str, str] = {
@@ -54,6 +57,7 @@ AGENT_COLORS: dict[str, str] = {
     "frost": "cyan",
     "snow": "bright_white",
     "dew": "green",
+    "sunshine": "gold",
 }
 
 

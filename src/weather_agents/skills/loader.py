@@ -31,6 +31,7 @@ def _get_python_skills() -> list[Skill]:
     from weather_agents.skills.content_writer import create_skill as _content_writer
     from weather_agents.skills.data_transformer import create_skill as _data_transformer
     from weather_agents.skills.document_analysis import create_skill as _document_analysis
+    from weather_agents.skills.emotional_companion import create_skill as _emotional_companion
     from weather_agents.skills.performance_checker import create_skill as _performance_checker
     from weather_agents.skills.security_auditor import create_skill as _security_auditor
     from weather_agents.skills.self_evolve import create_skill as _self_evolve
@@ -56,6 +57,7 @@ def _get_python_skills() -> list[Skill]:
         _sys_operator(),
         _ci_cd_manager(),
         _api_integrator(),
+        _emotional_companion(),
     ]
 
 

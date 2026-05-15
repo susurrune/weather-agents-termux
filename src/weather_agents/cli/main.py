@@ -89,6 +89,8 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/frost", "switch to Frost"),
     ("/snow", "switch to Snow"),
     ("/dew", "switch to Dew"),
+    ("/qing", "switch to Sunshine (晴)"),
+    ("/sunshine", "switch to Sunshine (晴)"),
     ("/version", "version info"),
     ("/quit", "exit chat"),
 ]
@@ -180,6 +182,7 @@ AGENT_SPINNERS: dict[str, str] = {
     "frost": "star",
     "snow": "dots2",
     "dew": "bounce",
+    "sunshine": "moon",
 }
 
 
@@ -1127,7 +1130,11 @@ async def _interactive(agent_name: str | None = None) -> None:
                         await asyncio.sleep(0.5)
                         # Clean up the user msg + empty assistant from the failed attempt
                         agent._pop_last_user_message()
-                        if agent.memory.short_term and agent.memory.short_term[-1].role == "assistant" and not agent.memory.short_term[-1].content:
+                        if (
+                            agent.memory.short_term
+                            and agent.memory.short_term[-1].role == "assistant"
+                            and not agent.memory.short_term[-1].content
+                        ):
                             agent.memory.short_term.pop()
                         continue
                     else:
@@ -1191,28 +1198,29 @@ def _build_welcome_art() -> Text:
 def _print_welcome(model: str, workspace_path: str = "") -> None:
     console.print()
 
-    agent_names = ["fog", "rain", "frost", "snow", "dew"]
+    agent_names = list(AGENT_CLASSES.keys())
+    agent_display = {c.name: c.display_name for c in AGENT_CLASSES.values()}
+    agent_role = {
+        "fog": "research",
+        "rain": "codegen",
+        "frost": "review",
+        "snow": "planning",
+        "dew": "devops",
+        "sunshine": "companion",
+    }
     art = _build_welcome_art()
 
     # ── Agent row ──────────────────────────────────────────────────────
     agent_tbl = Table(show_header=False, box=None, padding=(0, 3), expand=True)
-    for _ in range(5):
+    for _ in agent_names:
         agent_tbl.add_column(ratio=1, justify="center")
 
     agent_rows: list[list[Text]] = [[], [], []]
     for idx, name in enumerate(agent_names):
         color = AGENT_COLORS.get(name, "white")
         active = idx == 0
-        display = {"fog": "Fog", "rain": "Rain", "frost": "Frost", "snow": "Snow", "dew": "Dew"}[
-            name
-        ]
-        role = {
-            "fog": "research",
-            "rain": "codegen",
-            "frost": "review",
-            "snow": "planning",
-            "dew": "devops",
-        }[name]
+        display = agent_display.get(name, name.title())
+        role = agent_role.get(name, "")
         s = "●" if active else "○"
         s_style = f"bold {color}" if active else "dim"
 
@@ -1292,7 +1300,10 @@ def _print_help(ctx) -> None:
         (
             _h("Agent 切换", "Agents"),
             [
-                ("/fog  /rain  /frost  /snow  /dew", _h("切换当前 Agent", "switch active agent")),
+                (
+                    "/fog  /rain  /frost  /snow  /dew  /qing",
+                    _h("切换当前 Agent", "switch active agent"),
+                ),
                 ("/task <goal>", _h("多 Agent 编排", "multi-agent orchestration")),
             ],
         ),

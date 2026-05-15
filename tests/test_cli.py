@@ -106,7 +106,7 @@ class TestAgentSwitching:
 
     @pytest.mark.asyncio
     async def test_switch_all_agents(self):
-        for agent_name in ("fog", "rain", "frost", "snow", "dew"):
+        for agent_name in ("fog", "rain", "frost", "snow", "dew", "sunshine"):
             with (
                 patch("weather_agents.cli.main.create_system_context") as mock_create,
                 patch(
@@ -468,17 +468,29 @@ def _make_ctx():
 
 
 def _make_agent_map():
-    """Create a minimal agent map with mocks for all five agents."""
+    """Create a minimal agent map with mocks for all agents."""
     from weather_agents.core.agent import AgentState
 
     agents = {}
-    for name in ("fog", "rain", "frost", "snow", "dew"):
+    for name in ("fog", "rain", "frost", "snow", "dew", "sunshine"):
         ag = Mock()
         ag.name = name
-        ag.display_name = {"fog": "雾", "rain": "雨", "frost": "霜", "snow": "雪", "dew": "露"}[
-            name
-        ]
-        ag.emoji = {"fog": "~~", "rain": "//", "frost": "**", "snow": "..", "dew": ",,"}[name]
+        ag.display_name = {
+            "fog": "雾",
+            "rain": "雨",
+            "frost": "霜",
+            "snow": "雪",
+            "dew": "露",
+            "sunshine": "晴",
+        }[name]
+        ag.emoji = {
+            "fog": "~~",
+            "rain": "//",
+            "frost": "**",
+            "snow": "..",
+            "dew": ",,",
+            "sunshine": "**",
+        }[name]
         ag.state = AgentState.IDLE
         ag.chat = AsyncMock(return_value="mock response")
         ag.chat_stream = lambda _msg, _ag=ag: _async_iter(
@@ -596,7 +608,7 @@ class TestBuildStreamDisplay:
     def test_all_agents(self):
         from weather_agents.cli.main import _build_stream_display
 
-        for name in ("fog", "rain", "frost", "snow", "dew"):
+        for name in ("fog", "rain", "frost", "snow", "dew", "sunshine"):
             ag = _make_display_agent(name)
             _build_stream_display(ag, "status", "md text")
 
@@ -623,7 +635,7 @@ class TestBuildResponsePanel:
     def test_all_agents(self):
         from weather_agents.cli.main import _build_response_panel
 
-        for name in ("fog", "rain", "frost", "snow", "dew"):
+        for name in ("fog", "rain", "frost", "snow", "dew", "sunshine"):
             ag = _make_display_agent(name)
             _build_response_panel(ag, "response text", 2.0)
 
