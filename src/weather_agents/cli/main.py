@@ -29,7 +29,6 @@ if sys.platform == "win32":
     import msvcrt as _msvcrt
 else:
     import termios as _termios
-    import tty as _tty
 
 from weather_agents import __version__
 from weather_agents.core.config import (
@@ -141,7 +140,15 @@ def _get_key() -> str:
         fd = sys.stdin.fileno()
         old = _termios.tcgetattr(fd)
         try:
-            _tty.setraw(fd)
+            # Use cbreak-style mode: disable ICANON+ECHO but keep OPOST enabled.
+            # setraw() also disables OPOST, which breaks Rich Live's \n→\r\n
+            # translation and causes the cursor tracking to desync, making each
+            # Live refresh append a new copy of the prompt instead of overwriting.
+            new = _termios.tcgetattr(fd)
+            new[3] &= ~(_termios.ICANON | _termios.ECHO | _termios.ECHOE | _termios.ECHOK)
+            new[6][_termios.VMIN] = 1
+            new[6][_termios.VTIME] = 0
+            _termios.tcsetattr(fd, _termios.TCSANOW, new)
             ch = sys.stdin.read(1)
             if ch == "\x1b":
                 nxt = sys.stdin.read(2)
