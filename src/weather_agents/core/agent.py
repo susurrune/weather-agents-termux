@@ -349,11 +349,9 @@ class BaseAgent:
                     tool_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
                     if isinstance(raw_args, str):
-                        try:
-                            tool_args = json.loads(raw_args)
-                        except json.JSONDecodeError as e:
-                            tool_args = None
-                            parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {e}\nRaw arguments: {raw_args}"
+                        tool_args = _parse_tool_args(raw_args)
+                        if tool_args is None:
+                            parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {raw_args[:200]}"
                     else:
                         tool_args = raw_args
 
@@ -569,11 +567,9 @@ class BaseAgent:
                 tool_name = tc["function"]["name"]
                 raw_args = tc["function"]["arguments"]
                 if isinstance(raw_args, str):
-                    try:
-                        tool_args = json.loads(raw_args)
-                    except json.JSONDecodeError as e:
-                        tool_args = None
-                        parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {e}\nRaw arguments: {raw_args}"
+                    tool_args = _parse_tool_args(raw_args)
+                    if tool_args is None:
+                        parse_error = f"Invalid JSON in tool call arguments for '{tool_name}': {raw_args[:200]}"
                 else:
                     tool_args = raw_args
 
@@ -720,6 +716,48 @@ _TOOL_LABELS: dict[str, str] = {
     "fetch_page": "Fetching {url}",
     "delegate_to": "Delegating to {agent}: {task}",
 }
+
+
+def _parse_tool_args(raw: str) -> dict | None:
+    """Parse tool call JSON with basic repair for common LLM output issues."""
+    import re as _re
+
+    if not raw or not raw.strip():
+        return None
+
+    rv: dict
+
+    # Try standard parse first
+    try:
+        rv = json.loads(raw)
+        return rv
+    except json.JSONDecodeError:
+        pass
+
+    cleaned = raw.strip()
+
+    # Fix single-quote strings: {'key': 'value'} → {"key": "value"}
+    if cleaned.startswith("'") or ("'" in cleaned and '"' not in cleaned):
+        cleaned = cleaned.replace("'", '"')
+
+    # Fix unquoted keys: {key: "value"} → {"key": "value"}
+    cleaned = _re.sub(r'(?<!\{)("[^"]*"\s*:\s*)', lambda m: m.group(1), cleaned)
+    cleaned = _re.sub(r"([{,]\s*)(\w[\w\d_]*)(\s*:)", r'\1"\2"\3', cleaned)
+
+    # Fix trailing commas before ] or }
+    cleaned = _re.sub(r",\s*([}\]])", r"\1", cleaned)
+
+    # Fix trailing comma at end
+    cleaned = cleaned.rstrip(",").rstrip()
+
+    # Try again
+    try:
+        rv = json.loads(cleaned)
+        return rv
+    except json.JSONDecodeError:
+        pass
+
+    return None
 
 
 def _tool_status_label(name: str, args: dict) -> str:

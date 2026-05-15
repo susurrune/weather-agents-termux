@@ -454,3 +454,49 @@ Body
             skill = factory()
             assert skill.handler is not None, f"{skill.name} missing handler"
             assert callable(skill.handler)
+
+
+class TestParseToolArgs:
+    def test_valid_json(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        assert _parse_tool_args('{"query": "news"}') == {"query": "news"}
+
+    def test_single_quotes(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("{'query': 'news'}")
+        assert result == {"query": "news"}
+
+    def test_trailing_comma(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{"query": "news",}')
+        assert result == {"query": "news"}
+
+    def test_unquoted_keys(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args('{query: "news"}')
+        assert result == {"query": "news"}
+
+    def test_mixed_issues(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        result = _parse_tool_args("{'query': 'news', 'count': 5,}")
+        assert result == {"query": "news", "count": 5}
+
+    def test_empty_string(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        assert _parse_tool_args("") is None
+
+    def test_whitespace_only(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        assert _parse_tool_args("   ") is None
+
+    def test_garbage_returns_none(self):
+        from weather_agents.core.agent import _parse_tool_args
+
+        assert _parse_tool_args("not even close") is None
