@@ -140,11 +140,14 @@ def _get_key() -> str:
         fd = sys.stdin.fileno()
         old = _termios.tcgetattr(fd)
         try:
-            # Use cbreak-style mode: disable ICANON+ECHO but keep OPOST enabled.
-            # setraw() also disables OPOST, which breaks Rich Live's \n→\r\n
-            # translation and causes the cursor tracking to desync, making each
-            # Live refresh append a new copy of the prompt instead of overwriting.
+            # Disable ICANON+ECHO but keep OPOST enabled (unlike setraw which
+            # also disables OPOST). OPOST keeps \n→\r\n output translation so
+            # Rich Live's cursor tracking stays correct and doesn't accumulate
+            # repeated prompt frames on each refresh.
+            # Also disable ICRNL so Enter arrives as \r (not \n), consistent
+            # with what the rest of this function expects.
             new = _termios.tcgetattr(fd)
+            new[0] &= ~_termios.ICRNL  # Enter → \r, not \n
             new[3] &= ~(_termios.ICANON | _termios.ECHO | _termios.ECHOE | _termios.ECHOK)
             new[6][_termios.VMIN] = 1
             new[6][_termios.VTIME] = 0
@@ -167,7 +170,8 @@ def _get_key() -> str:
                 return "esc"
             if ch == "\x03":
                 raise KeyboardInterrupt
-            if ch == "\r":
+            # Accept both \r (physical keyboard) and \n (mobile IME / SSH)
+            if ch in ("\r", "\n"):
                 return "enter"
             if ch in ("\x7f", "\x08"):
                 return "backspace"
