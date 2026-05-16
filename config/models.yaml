@@ -55,17 +55,17 @@ anthropic:
     output_cost_per_1k: 0.00400
 
 deepseek:
-  deepseek/deepseek-v4-flash:
+  deepseek/deepseek-chat:
     provider: "deepseek"
-    context_window: 128000
+    context_window: 65536
     max_output: 8192
-    input_cost_per_1k: 0.00020
-    output_cost_per_1k: 0.00020
+    input_cost_per_1k: 0.00027
+    output_cost_per_1k: 0.00110
     fallback:
-      - deepseek/deepseek-v4-pro
-  deepseek/deepseek-v4-pro:
+      - deepseek/deepseek-reasoner
+  deepseek/deepseek-reasoner:
     provider: "deepseek"
-    context_window: 128000
+    context_window: 65536
     max_output: 8192
     input_cost_per_1k: 0.00055
     output_cost_per_1k: 0.00219
