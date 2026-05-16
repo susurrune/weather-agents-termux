@@ -154,18 +154,33 @@ def _get_key() -> str:
             _termios.tcsetattr(fd, _termios.TCSANOW, new)
             ch = sys.stdin.read(1)
             if ch == "\x1b":
-                nxt = sys.stdin.read(2)
-                if nxt == "[A":
+                # Read the escape sequence with a short timeout so we don't
+                # block forever if it's a bare Esc key.  Use VTIME=1 (0.1 s)
+                # for subsequent bytes and drain any leftover bytes afterward
+                # so multi-byte sequences (e.g. \x1b[1;2A) don't pollute the
+                # next _get_key() call.
+                new2 = _termios.tcgetattr(fd)
+                new2[6][_termios.VMIN] = 0
+                new2[6][_termios.VTIME] = 1  # 0.1 s timeout
+                _termios.tcsetattr(fd, _termios.TCSANOW, new2)
+                seq = sys.stdin.read(2)
+                # Drain any remaining bytes of longer sequences
+                while True:
+                    extra = sys.stdin.read(1)
+                    if not extra:
+                        break
+                _termios.tcsetattr(fd, _termios.TCSANOW, new)  # restore VMIN=1
+                if seq == "[A":
                     return "up"
-                if nxt == "[B":
+                if seq == "[B":
                     return "down"
-                if nxt == "[C":
+                if seq == "[C":
                     return "right"
-                if nxt == "[D":
+                if seq == "[D":
                     return "left"
-                if nxt == "[Z":
+                if seq == "[Z":
                     return "shift_tab"
-                if nxt in ("OQ", "OP", "OQ"):
+                if seq in ("OQ", "OP", "OR"):
                     return "tab"
                 return "esc"
             if ch == "\x03":
@@ -553,6 +568,7 @@ def _place_ime_cursor(col: int) -> None:
 # -- Interactive mode (plan / auto) ------------------------------------------
 
 INTERACTIVE_MODE: str = "auto"  # "auto" or "plan"
+_INPUT_HISTORY: list[str] = []  # persistent command history across prompts
 
 
 def _should_auto_continue(text: str) -> bool:
@@ -750,12 +766,13 @@ def _read_line_with_popup(agent, ctx, mode: str = "auto") -> str:
     cursor_pos = 0
     popup_visible = False
     selected_idx = 0
+    history_idx = len(_INPUT_HISTORY)  # points past the end; ↑ moves backward
 
     result = ""
     with Live(
         Table(show_header=False, box=None, padding=0),
         console=console,
-        refresh_per_second=30,
+        refresh_per_second=10,
         transient=True,
     ) as live:
         while True:
@@ -853,6 +870,21 @@ def _read_line_with_popup(agent, ctx, mode: str = "auto") -> str:
                     selected_idx = 0
                 continue
 
+            # History navigation with ↑/↓ when popup is not active
+            if key == "up" and _INPUT_HISTORY:
+                history_idx = max(0, history_idx - 1)
+                buffer[:] = list(_INPUT_HISTORY[history_idx])
+                cursor_pos = len(buffer)
+                continue
+            if key == "down" and _INPUT_HISTORY:
+                history_idx = min(len(_INPUT_HISTORY), history_idx + 1)
+                if history_idx == len(_INPUT_HISTORY):
+                    buffer.clear()
+                else:
+                    buffer[:] = list(_INPUT_HISTORY[history_idx])
+                cursor_pos = len(buffer)
+                continue
+
             if isinstance(key, str) and len(key) == 1:
                 if key == "/" and not buffer:
                     buffer.insert(cursor_pos, key)
@@ -869,6 +901,8 @@ def _read_line_with_popup(agent, ctx, mode: str = "auto") -> str:
                         selected_idx = 0
 
     if result:
+        if not _INPUT_HISTORY or _INPUT_HISTORY[-1] != result:
+            _INPUT_HISTORY.append(result)
         color = AGENT_COLORS.get(agent.name, "cyan")
         echo = Text()
         echo.append(agent.display_name, style=f"bold {color}")
