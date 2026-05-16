@@ -89,8 +89,11 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/snow", "switch to Snow"),
     ("/dew", "switch to Dew"),
     ("/sunshine", "switch to Sunshine (晴)"),
+    ("/auto", "autonomous mode"),
+    ("/plan", "plan-first mode"),
     ("/version", "version info"),
     ("/quit", "exit chat"),
+    ("/exit", "exit chat"),
 ]
 
 _COMMAND_LOOKUP: dict[str, str] = {c[0].split()[0].lstrip("/"): c[0] for c in _COMMANDS}
@@ -197,7 +200,7 @@ def _get_key() -> str:
             _termios.tcsetattr(fd, _termios.TCSADRAIN, old)
 
 
-app = typer.Typer(name="wacode", help="Weather Agents CLI", no_args_is_help=False)
+app = typer.Typer(name="wa", help="Weather Agents CLI", no_args_is_help=False)
 console = Console()
 
 # Per-agent animated spinner themes for streaming / status indicators
@@ -1452,7 +1455,7 @@ def _print_help(ctx) -> None:
                 ("/session new [name]", _h("新建会话", "start new session")),
                 ("/session load <id>", _h("加载会话", "switch to session")),
                 ("/session delete <id>", _h("删除会话", "delete session")),
-                ("/quit", _h("退出", "exit")),
+                ("/quit  /exit", _h("退出", "exit")),
             ],
         ),
     ]
@@ -2169,7 +2172,7 @@ def chat(
         if not _is_configured():
             console.print(
                 "\n  [yellow]Skipped without entering a key. "
-                "Run [cyan]wacode init[/cyan] later when ready.[/yellow]\n"
+                "Run [cyan]wa init[/cyan] later when ready.[/yellow]\n"
             )
             raise typer.Exit(0)
 
@@ -2270,7 +2273,7 @@ def config(
 
     elif action == "set":
         if not key or value is None:
-            console.print("  [red]usage: wacode config set <key> <value>[/red]")
+            console.print("  [red]usage: wa config set <key> <value>[/red]")
             raise typer.Exit(1)
         ok, msg = set_config(key, value)
         color = "green" if ok else "red"
@@ -2278,7 +2281,7 @@ def config(
 
     elif action == "delete":
         if not key:
-            console.print("  [red]usage: wacode config delete <key>[/red]")
+            console.print("  [red]usage: wa config delete <key>[/red]")
             raise typer.Exit(1)
         ok, msg = delete_config(key)
         color = "green" if ok else "red"

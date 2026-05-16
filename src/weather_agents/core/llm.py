@@ -114,7 +114,7 @@ def _format_user_facing_error(model: str, err: BaseException | None) -> str:
         short = text.splitlines()[0][:200]
         return (
             f"❌  {model} 调用失败 (Bad Request)：{short}\n"
-            f"会话消息序列可能损坏，可运行 `wacode memory clear` 清理后重试。"
+            f"会话消息序列可能损坏，可运行 `wa memory clear` 清理后重试。"
         )
     # Generic fallback — short, no stack trace, no LiteLLM banner.
     short = text.splitlines()[0][:200]
