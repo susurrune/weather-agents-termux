@@ -114,7 +114,7 @@ def get_model_context_window(model_name: str) -> int:
 
 @dataclass
 class LLMConfig:
-    default_model: str = "deepseek/deepseek-chat"
+    default_model: str = "deepseek/deepseek-v4-flash"
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 120

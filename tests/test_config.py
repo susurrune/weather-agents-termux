@@ -84,7 +84,7 @@ class TestConfigCore:
 
         delete_config("default_model")
         cfg = load_config()
-        assert cfg.llm.default_model == "deepseek/deepseek-chat"
+        assert cfg.llm.default_model == "deepseek/deepseek-v4-flash"
 
 
 class TestConfigValidation:
@@ -231,7 +231,7 @@ class TestMaxToolRoundsConfig:
     def test_max_tool_rounds_loaded(self, temp_config_dir):
         from weather_agents.core.config import invalidate_cache, load_config, set_config
 
-        set_config("default_model", "deepseek/deepseek-chat")
+        set_config("default_model", "deepseek/deepseek-v4-flash")
         invalidate_cache()
         cfg = load_config()
         for name in ("fog", "rain", "frost", "snow", "dew"):

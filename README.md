@@ -197,7 +197,7 @@ wa task "设计并实现一个 URL 短链接服务"
 |:---------|:-------|
 | OpenAI | `gpt-4o` · `gpt-4o-mini` · `gpt-4.1` · `gpt-4.1-mini` · `gpt-4.1-nano` |
 | Anthropic | `claude-opus-4-7` · `claude-sonnet-4-6` · `claude-haiku-4-5` |
-| DeepSeek | `deepseek/deepseek-chat` · `deepseek/deepseek-reasoner` |
+| DeepSeek | `deepseek/deepseek-v4-flash` · `deepseek/deepseek-v4-pro` |
 | Ollama | `ollama/llama3` · `ollama/qwen2.5` · `ollama/deepseek-r1` (本地) |
 
 > Use `wa config models` to see what your installation currently supports.
@@ -345,7 +345,7 @@ wa config set workspace.path /custom/path
 
 ```yaml
 llm:
-  default_model: "deepseek/deepseek-chat"
+  default_model: "deepseek/deepseek-v4-flash"
   temperature: 0.7
   max_tokens: 4096
   timeout: 60
