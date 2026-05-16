@@ -1242,6 +1242,8 @@ def _build_welcome_art() -> Text:
 def _print_welcome(model: str, workspace_path: str = "") -> None:
     console.print()
 
+    w = console.width  # actual terminal columns
+
     agent_names = list(AGENT_CLASSES.keys())
     agent_display = {c.name: c.display_name for c in AGENT_CLASSES.values()}
     agent_role = {
@@ -1252,78 +1254,134 @@ def _print_welcome(model: str, workspace_path: str = "") -> None:
         "dew": "devops",
         "sunshine": "companion",
     }
-    art = _build_welcome_art()
 
-    # ── Agent row ──────────────────────────────────────────────────────
-    agent_tbl = Table(show_header=False, box=None, padding=(0, 3), expand=True)
-    for _ in agent_names:
-        agent_tbl.add_column(ratio=1, justify="center")
-
-    agent_rows: list[list[Text]] = [[], [], []]
-    for idx, name in enumerate(agent_names):
+    def _agent_cell(name: str, idx: int) -> tuple[Text, Text, Text]:
         color = AGENT_COLORS.get(name, "white")
         active = idx == 0
         display = agent_display.get(name, name.title())
         role = agent_role.get(name, "")
         s = "●" if active else "○"
         s_style = f"bold {color}" if active else "dim"
-
         line1 = Text(justify="center")
         line1.append(display, style=f"bold {color}")
-
         line2 = Text(justify="center")
         line2.append(role, style="dim italic")
-
         line3 = Text(justify="center")
         line3.append(f"{s} ", style=s_style)
         line3.append("active" if active else "standby", style=s_style)
+        return line1, line2, line3
 
-        agent_rows[0].append(line1)
-        agent_rows[1].append(line2)
-        agent_rows[2].append(line3)
+    # ── Narrow layout (< 62 cols): 2 rows × 3 agents, no art, compact meta ─
+    if w < 62:
+        # Agent table: 3 columns per row
+        def _agent_half_tbl(names: list[str], start_idx: int) -> Table:
+            tbl = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+            for _ in names:
+                tbl.add_column(ratio=1, justify="center")
+            rows: list[list[Text]] = [[], [], []]
+            for i, name in enumerate(names):
+                l1, l2, l3 = _agent_cell(name, start_idx + i)
+                rows[0].append(l1)
+                rows[1].append(l2)
+                rows[2].append(l3)
+            for row in rows:
+                tbl.add_row(*row)
+            return tbl
 
-    for row in agent_rows:
-        agent_tbl.add_row(*row)
+        title = Text(justify="center")
+        title.append("≈", style="cyan bold")
+        title.append("  W E A T H E R   A G E N T S  ", style="bold white")
+        title.append("≈", style="cyan bold")
 
-    # ── Meta ───────────────────────────────────────────────────────────
-    meta = Text(justify="center")
-    meta.append("model  ", style="dim")
-    meta.append(model, style="cyan bold")
-    meta.append("   ·   ", style="dim")
-    meta.append("workspace  ", style="dim")
-    if workspace_path:
-        short_ws = workspace_path if len(workspace_path) <= 40 else "…" + workspace_path[-38:]
-        meta.append(short_ws, style="white")
+        model_short = model if len(model) <= w - 14 else "…" + model[-(w - 15) :]
+        meta1 = Text(justify="center")
+        meta1.append("model  ", style="dim")
+        meta1.append(model_short, style="cyan bold")
+
+        meta2 = Text(justify="center")
+        if workspace_path:
+            max_ws = max(10, w - 18)
+            short_ws = (
+                workspace_path
+                if len(workspace_path) <= max_ws
+                else "…" + workspace_path[-max_ws + 1 :]
+            )
+            meta2.append("ws  ", style="dim")
+            meta2.append(short_ws, style="white")
+
+        tip = Text(justify="center")
+        tip.append("/", style="cyan bold")
+        tip.append(" commands  ·  ", style="dim")
+        tip.append("/help", style="cyan bold")
+
+        content = Table(show_header=False, box=None, padding=0, expand=True)
+        content.add_column(justify="center")
+        content.add_row(title)
+        content.add_row(Text(""))
+        content.add_row(_agent_half_tbl(agent_names[:3], 0))
+        content.add_row(Text(""))
+        content.add_row(_agent_half_tbl(agent_names[3:], 3))
+        content.add_row(Text(""))
+        content.add_row(meta1)
+        if workspace_path:
+            content.add_row(meta2)
+        content.add_row(Text(""))
+        content.add_row(tip)
+
+        console.print(Panel(content, border_style="dim white", box=box.ROUNDED, padding=(0, 1)))
+
+    # ── Wide layout (>= 62 cols): original 6-column layout with art ────────
     else:
-        meta.append("(none)", style="dim")
+        art = _build_welcome_art()
 
-    tip = Text(justify="center")
-    tip.append("Type  ", style="dim")
-    tip.append("/", style="cyan bold")
-    tip.append("  for commands  ·  ", style="dim")
-    tip.append("/help", style="cyan bold")
-    tip.append("  for reference", style="dim")
+        agent_tbl = Table(show_header=False, box=None, padding=(0, 3), expand=True)
+        for _ in agent_names:
+            agent_tbl.add_column(ratio=1, justify="center")
 
-    # ── Assemble ───────────────────────────────────────────────────────
-    content = Table(show_header=False, box=None, padding=0, expand=True)
-    content.add_column(justify="center")
+        agent_rows: list[list[Text]] = [[], [], []]
+        for idx, name in enumerate(agent_names):
+            l1, l2, l3 = _agent_cell(name, idx)
+            agent_rows[0].append(l1)
+            agent_rows[1].append(l2)
+            agent_rows[2].append(l3)
+        for row in agent_rows:
+            agent_tbl.add_row(*row)
 
-    content.add_row(art)
-    content.add_row(Text(""))
-    content.add_row(agent_tbl)
-    content.add_row(Text(""))
-    content.add_row(meta)
-    content.add_row(Text(""))
-    content.add_row(tip)
+        meta = Text(justify="center")
+        meta.append("model  ", style="dim")
+        meta.append(model, style="cyan bold")
+        meta.append("   ·   ", style="dim")
+        meta.append("workspace  ", style="dim")
+        if workspace_path:
+            max_ws = max(10, w - 30 - len(model))
+            short_ws = (
+                workspace_path
+                if len(workspace_path) <= max_ws
+                else "…" + workspace_path[-max_ws + 1 :]
+            )
+            meta.append(short_ws, style="white")
+        else:
+            meta.append("(none)", style="dim")
 
-    console.print(
-        Panel(
-            content,
-            border_style="dim white",
-            box=box.ROUNDED,
-            padding=(1, 2),
-        )
-    )
+        tip = Text(justify="center")
+        tip.append("Type  ", style="dim")
+        tip.append("/", style="cyan bold")
+        tip.append("  for commands  ·  ", style="dim")
+        tip.append("/help", style="cyan bold")
+        tip.append("  for reference", style="dim")
+
+        content = Table(show_header=False, box=None, padding=0, expand=True)
+        content.add_column(justify="center")
+        content.add_row(art)
+        content.add_row(Text(""))
+        content.add_row(agent_tbl)
+        content.add_row(Text(""))
+        content.add_row(meta)
+        content.add_row(Text(""))
+        content.add_row(tip)
+
+        console.print(Panel(content, border_style="dim white", box=box.ROUNDED, padding=(1, 2)))
+
     console.print()
 
 
